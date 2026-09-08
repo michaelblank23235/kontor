@@ -1,0 +1,37 @@
+name: Kontor MSIX Bundle
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Kontor-Store-Build.zip'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Prepare source
+        shell: pwsh
+        run: Expand-Archive -LiteralPath Kontor-Store-Build.zip -DestinationPath build-source
+      - name: Install dependencies
+        working-directory: build-source/Kontor-Windows
+        run: npm ci
+      - name: Test application
+        working-directory: build-source/Kontor-Windows
+        run: npm test
+      - name: Build Store bundle
+        working-directory: build-source/Kontor-Windows
+        shell: powershell
+        run: ./scripts/build-store.ps1
+      - name: Upload Store bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kontor-Store-x64
+          path: build-source/Kontor-Windows/release/store/*
+          if-no-files-found: error
+          retention-days: 14
