@@ -1,0 +1,63 @@
+name: Kontor existing package security scan
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/security-scan.yml'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  scan:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: Download exact existing Store artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '10151000141'
+          run-id: '34474661181'
+          github-token: ${{ github.token }}
+          path: scan-input
+      - name: Scan package and extracted program files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path scan-report -Force | Out-Null
+          Start-Transcript -Path scan-report/Defender-scan.txt
+          try {
+            Write-Output 'Source run: 34474661181; artifact: 10151000141'
+            Write-Output 'GitHub ZIP SHA256: 099513d219867d5eedde35e92359976d85ecd856e2098635f4c069c809fa0249'
+            Get-ChildItem scan-input -Recurse -File | Get-FileHash -Algorithm SHA256 | Format-List
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $bundle = @(Get-ChildItem scan-input -Recurse -Filter *.msixbundle)
+            if ($bundle.Count -ne 1) { throw 'Expected exactly one MSIX bundle' }
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($bundle[0].FullName, (Join-Path $PWD 'scan-input/bundle-content'))
+            $packages = @(Get-ChildItem scan-input/bundle-content -Recurse -File | Where-Object { $_.Extension -in '.msix', '.appx' })
+            if ($packages.Count -eq 0) { throw 'No application package in bundle' }
+            $index = 0
+            foreach ($package in $packages) {
+              [System.IO.Compression.ZipFile]::ExtractToDirectory($package.FullName, (Join-Path $PWD "scan-input/program-$index"))
+              $index++
+            }
+            $scanner = Get-ChildItem "$env:ProgramData/Microsoft/Windows Defender/Platform/*/MpCmdRun.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+            if (!$scanner) { $scanner = Get-Item "$env:ProgramFiles/Windows Defender/MpCmdRun.exe" }
+            & $scanner.FullName -SignatureUpdate
+            if ($LASTEXITCODE -ne 0) { throw "Defender update failed: $LASTEXITCODE" }
+            Get-MpComputerStatus | Select-Object AMServiceEnabled, AntivirusEnabled, AMEngineVersion, AntivirusSignatureVersion, AntivirusSignatureLastUpdated | Format-List
+            & $scanner.FullName -Scan -ScanType 3 -File (Join-Path $PWD 'scan-input') -DisableRemediation
+            $scanCode = $LASTEXITCODE
+            Write-Output "Scan exit code: $scanCode"
+            if ($scanCode -ne 0) { throw "Defender detection or scan error; inspect output. Code: $scanCode" }
+            Write-Output 'Defender scan completed without a detection. This does not resolve or override Chrome Safe Browsing.'
+          } finally {
+            Stop-Transcript
+          }
+      - name: Upload scan report only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kontor-Defender-report
+          path: scan-report/*
+          if-no-files-found: warn
+          retention-days: 14
