@@ -85,6 +85,18 @@ function saveSettings() {
   const { hotkeyError, backupError, ...stored } = settings;
   atomicWrite(settingsFile, Buffer.from(JSON.stringify(stored)));
 }
+function showReminder(title, body) {
+  const n = new Notification({
+    title: "Kontor · " + title,
+    body,
+    icon: path.join(base, "resources/icon.png"),
+  });
+  n.on("click", () => {
+    showMain();
+    win?.webContents.send("kontor:navigate", "todo");
+  });
+  n.show();
+}
 // Only possible while unlocked: due dates are inside the encrypted database.
 function remind({ silent = false } = {}) {
   if (settings?.reminders === false || !vault?.repo) return;
@@ -97,16 +109,7 @@ function remind({ silent = false } = {}) {
     settings.remindedOn = r.today;
     saveSettings();
     if (silent || !r.title || !Notification.isSupported()) return;
-    const n = new Notification({
-      title: "Kontor · " + r.title,
-      body: r.body,
-      icon: path.join(base, "resources/icon.png"),
-    });
-    n.on("click", () => {
-      showMain();
-      win?.webContents.send("kontor:navigate", "todo");
-    });
-    n.show();
+    showReminder(r.title, r.body);
   } catch (error) {
     log.record("reminder.failed", { message: error.message });
   }
@@ -465,6 +468,18 @@ app
       if (d.canceled) return false;
       vault.backup(d.filePath);
       return true;
+    });
+    // Shows today's reminder immediately, ignoring time and "already reminded".
+    handle("testReminder", () => {
+      if (!Notification.isSupported())
+        throw Error("Windows-Benachrichtigungen sind nicht verfügbar.");
+      const r = reminder(unlocked().all("todo"), { at: "00:00" });
+      if (r.title) showReminder(r.title, r.body);
+      else
+        showReminder(
+          "Keine fälligen Aufgaben",
+          "So sieht die tägliche Erinnerung aus, wenn Aufgaben fällig sind.",
+        );
     });
     handle("openBackupDir", async () => {
       fs.mkdirSync(backupDir(), { recursive: true });

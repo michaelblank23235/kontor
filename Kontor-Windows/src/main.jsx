@@ -2779,6 +2779,21 @@ function SettingsPanel({ status, action, refresh }) {
               Fristen sind verschlüsselt gespeichert. Ist Kontor gesperrt,
               sehen Sie fällige Aufgaben nach dem Entsperren in der Übersicht.
             </p>
+            <div className="settings-buttons">
+              <button
+                onClick={() =>
+                  action(async () => {
+                    await api.testReminder();
+                    setMessage(
+                      "Benachrichtigung gesendet. Falls nichts erscheint, Benachrichtigungen für Kontor in den Windows-Einstellungen erlauben.",
+                    );
+                  })
+                }
+              >
+                <Bell size={16} />
+                Jetzt testen
+              </button>
+            </div>
           </>
         )}
       </section>
