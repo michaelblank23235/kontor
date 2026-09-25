@@ -160,9 +160,25 @@ async function until(fn) {
       p.evaluate(() => document.documentElement.dataset.theme === "light"),
     );
     await p.screenshot({ path: "test-results/settings-light.png" });
+    // Automatic backup lands in the (test) Documents folder and can be switched off.
+    const autoDir = path.join(dir, "Dokumente", "Kontor-Sicherungen");
+    const autoFiles = fs.readdirSync(autoDir);
+    assert.equal(autoFiles.length, 1);
+    assert.match(autoFiles[0], /^Kontor-Auto-\d{4}-\d{2}-\d{2}\.kontorbackup$/);
+    const toggle = p.getByLabel("Automatische Sicherung", { exact: true });
+    assert.equal(await toggle.isChecked(), true);
+    await p.getByText(autoDir, { exact: false }).waitFor();
+    await toggle.uncheck();
+    await until(async () =>
+      p.evaluate(async () => (await window.kontor.status()).settings.autoBackup === false),
+    );
+    assert.equal(
+      await p.evaluate(async () => (await window.kontor.status()).settings.theme),
+      "light",
+    );
     assert.deepEqual(errors, []);
     console.log(
-      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, theme, IPC isolation.",
+      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, automatic backup, theme, IPC isolation.",
     );
   } finally {
     await app?.close();

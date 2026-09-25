@@ -2,7 +2,14 @@
 const { app, dialog } = require("electron");
 const { createStartupLog } = require("./startup.cjs");
 const testMode = process.env.KONTOR_TEST === "1" && !app.isPackaged;
-if (testMode) app.setPath("userData", process.env.KONTOR_TEST_DIR);
+if (testMode) {
+  app.setPath("userData", process.env.KONTOR_TEST_DIR);
+  // Keep automatic test backups out of the real Documents folder.
+  app.setPath(
+    "documents",
+    require("node:path").join(process.env.KONTOR_TEST_DIR, "Dokumente"),
+  );
+}
 const log = createStartupLog(
   testMode
     ? require("node:path").join(process.env.KONTOR_TEST_DIR, "start.log")
