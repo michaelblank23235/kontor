@@ -2680,17 +2680,60 @@ function SettingsPanel({ status, action, refresh }) {
           Ihre Daten liegen verschlüsselt auf diesem Rechner. Eine Sicherung
           enthält Gespräche, Aufgaben, Notizen, Verknüpfungen und alle Anhänge.
         </p>
-        <button
-          onClick={() =>
-            action(async () => {
-              if (await api.backup())
-                setMessage("Sicherung erfolgreich exportiert.");
-            })
-          }
-        >
-          <Download size={16} />
-          Sicherung exportieren
-        </button>
+        <div className="settings-line">
+          <div>
+            <strong>Automatische Sicherung</strong>
+            <p>
+              Täglich sowie beim Sperren und Beenden. Die letzten 14 Tage
+              bleiben erhalten.
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            aria-label="Automatische Sicherung"
+            checked={status.settings.autoBackup !== false}
+            onChange={(e) => {
+              const autoBackup = e.target.checked;
+              action(async () => {
+                await api.settings({ ...status.settings, autoBackup });
+                setSettings({ ...settings, autoBackup });
+                await refresh();
+              });
+            }}
+          />
+        </div>
+        {status.settings.autoBackup !== false && (
+          <p className="hint">
+            Speicherort: {status.settings.backupDir}
+            {status.settings.lastBackup &&
+              ` · Zuletzt: ${new Date(status.settings.lastBackup).toLocaleString("de-DE")}`}
+            . Die Sicherungen sind mit Ihrer PIN verschlüsselt und lassen sich
+            auf einem neuen Rechner wiederherstellen.
+          </p>
+        )}
+        {status.settings.backupError && (
+          <p className="form-error">
+            Automatische Sicherung fehlgeschlagen:{" "}
+            {status.settings.backupError}
+          </p>
+        )}
+        <div className="settings-buttons">
+          <button onClick={() => action(() => api.openBackupDir())}>
+            <Folder size={16} />
+            Sicherungsordner öffnen
+          </button>
+          <button
+            onClick={() =>
+              action(async () => {
+                if (await api.backup())
+                  setMessage("Sicherung erfolgreich exportiert.");
+              })
+            }
+          >
+            <Download size={16} />
+            Sicherung exportieren
+          </button>
+        </div>
         <div className="settings-divider" />
         <h3>Sicherung wiederherstellen</h3>
         <p className="small muted">
@@ -2748,7 +2791,7 @@ function SettingsPanel({ status, action, refresh }) {
         </p>
       )}
       <p className="version">
-        Kontor für Windows · 0.1.1 · Lokal. Ohne Kalender. Ohne Cloud.
+        Kontor für Windows · {__APP_VERSION__} · Lokal. Ohne Kalender. Ohne Cloud.
       </p>
     </div>
   );

@@ -44,6 +44,30 @@ test("Verschlüsselung, falsche Passphrase, Wiederöffnen und vollständige Sich
   assert.ok(fs.existsSync(v.file + ".vor-import.kontorbackup"));
   v.lock();
 });
+test("Automatische Sicherung: einmal pro Tag, erzwingbar, alte werden aufgeräumt", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kontor-auto-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const v = new Vault(path.join(dir, "data"));
+  const target = path.join(dir, "Kontor-Sicherungen");
+  assert.throws(() => v.autoBackup(target), /gesperrt/);
+  await v.unlock("0123");
+  fs.mkdirSync(target);
+  fs.writeFileSync(path.join(target, "Kontor-2026-01-01.kontorbackup"), "x");
+  const day = (d) => new Date(2026, 0, d, 12);
+  for (let d = 1; d <= 16; d++)
+    assert.ok(v.autoBackup(target, { day: day(d) }));
+  assert.equal(v.autoBackup(target, { day: day(16) }), null);
+  v.command("save", { kind: "note", item: { title: "Später" } });
+  assert.ok(v.autoBackup(target, { day: day(16), force: true }));
+  const files = fs.readdirSync(target).sort();
+  assert.equal(files.length, 15);
+  assert.equal(files[0], "Kontor-2026-01-01.kontorbackup");
+  assert.equal(files[1], "Kontor-Auto-2026-01-03.kontorbackup");
+  const latest = path.join(target, "Kontor-Auto-2026-01-16.kontorbackup");
+  await v.restore(latest, "0123");
+  assert.equal(v.repo.all("note")[0].title, "Später");
+  v.lock();
+});
 test("Beschädigte Sicherung verändert laufende Daten nicht", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kontor-corrupt-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

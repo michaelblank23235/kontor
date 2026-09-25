@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld("kontor", {
   attachment: (id) => invoke("attachment", id),
   saveAttachment: (id) => invoke("saveAttachment", id),
   backup: () => invoke("backup"),
+  openBackupDir: () => invoke("openBackupDir"),
   restore: (p) => invoke("restore", p),
   exportPDF: (k, id) => invoke("exportPDF", k, id),
   external: (u) => invoke("external", u),

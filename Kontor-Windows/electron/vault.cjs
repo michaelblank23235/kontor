@@ -134,6 +134,23 @@ class Vault {
       throw Error("Bitte einen anderen Speicherort wählen.");
     atomicWrite(file, fs.readFileSync(this.file));
   }
+  // One file per local calendar day; only files matching the automatic name are pruned.
+  autoBackup(dir, { force = false, keep = 14, day = new Date() } = {}) {
+    if (!this.repo) throw Error("Kontor ist gesperrt.");
+    const stamp = day.toLocaleDateString("sv-SE");
+    const file = path.join(dir, `Kontor-Auto-${stamp}.kontorbackup`);
+    if (!force && fs.existsSync(file)) return null;
+    this.backup(file);
+    const pattern = /^Kontor-Auto-\d{4}-\d{2}-\d{2}\.kontorbackup$/;
+    for (const name of fs
+      .readdirSync(dir)
+      .filter((n) => pattern.test(n))
+      .sort()
+      .reverse()
+      .slice(keep))
+      fs.unlinkSync(path.join(dir, name));
+    return file;
+  }
   async restore(file, password) {
     const bytes = fs.readFileSync(file);
     const decoded = decrypt(bytes, password);

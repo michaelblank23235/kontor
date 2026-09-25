@@ -27,6 +27,7 @@ Beim ersten Start eine PIN aus genau vier Ziffern vergeben (führende Nullen sin
 - PDF-Export für Gespräche, Notizen, Aufgaben und Personenakten.
 - Inbox mit Umwandlung in Gespräche, Aufgaben oder Notizen; separates Schnellerfassungsfenster, globales Tastenkürzel und Symbol im Infobereich.
 - Dunkles/helles/systemabhängiges Erscheinungsbild, Sperren, verschlüsselte Sicherung und Wiederherstellung.
+- Automatische Sicherung (abschaltbar): einmal täglich nach dem Entsperren sowie beim Sperren und Beenden nach `Dokumente\Kontor-Sicherungen`. Die Dateien heißen `Kontor-Auto-JJJJ-MM-TT.kontorbackup`; die neuesten 14 bleiben erhalten, andere Dateien im Ordner werden nicht angefasst.
 
 Gespräche und Aufgaben werden ausdrücklich mit **Speichern** gespeichert. Notizen speichern Änderungen nach kurzer Pause automatisch; beim Schließen oder Sperren werden offene Notizänderungen vorher gespeichert. Die Entsperrung erfolgt per PIN, nicht per Touch ID oder Windows Hello.
 
@@ -36,7 +37,7 @@ Die Anwendung lädt keine externen Inhalte, enthält keine Telemetrie und benöt
 
 Der Desktop-Hauptprozess verwaltet eine SQLite-Datenbank über `sql.js`. Auf dem Datenträger liegt ausschließlich ein mit AES-256-GCM verschlüsseltes Datenbankabbild (`kontor.kontorvault`). Der Schlüssel wird mit scrypt aus der PIN (bei alten Daten der Passphrase) und einem zufälligen Salt abgeleitet. Änderungen werden transaktional ausgeführt und über eine temporäre Datei atomar ersetzt. Schreibfehler rollen den Speicherstand zurück.
 
-Der Standardpfad liegt im Benutzerprofil unter `%APPDATA%\kontor-windows`. Erscheinungsbild und Tastenkürzel stehen getrennt in `settings.json`. Vor dem Import einer Sicherung wird der aktuelle Datenbestand unter `kontor.kontorvault.vor-import.kontorbackup` gesichert. Exportierte PDF-Dateien und einzeln gespeicherte Anhänge sind normale, unverschlüsselte Dateien am selbst gewählten Speicherort.
+Der Standardpfad liegt im Benutzerprofil unter `%APPDATA%\kontor-windows`. Erscheinungsbild, Tastenkürzel und die Sicherungseinstellung stehen getrennt in `settings.json`. Automatische Sicherungen sind wie die Datenbank mit der PIN verschlüsselt; liegt der Dokumente-Ordner in OneDrive, landen sie verschlüsselt in der Cloud. Vor dem Import einer Sicherung wird der aktuelle Datenbestand unter `kontor.kontorvault.vor-import.kontorbackup` gesichert. Exportierte PDF-Dateien und einzeln gespeicherte Anhänge sind normale, unverschlüsselte Dateien am selbst gewählten Speicherort.
 
 ## Entwicklung auf dem Mac
 

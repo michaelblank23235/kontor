@@ -63,8 +63,25 @@ async function flushEditors() {
     ),
   );
 }
+const backupDir = () =>
+  path.join(app.getPath("documents"), "Kontor-Sicherungen");
+// Automatic backups must never block saving, locking or quitting.
+function autoBackup(force = false) {
+  if (settings?.autoBackup === false || !vault?.repo) return;
+  try {
+    if (vault.autoBackup(backupDir(), { force })) {
+      settings.lastBackup = new Date().toISOString();
+      atomicWrite(settingsFile, Buffer.from(JSON.stringify(settings)));
+    }
+    delete settings.backupError;
+  } catch (error) {
+    settings.backupError = error.message;
+    log.record("backup.auto.failed", { message: error.message });
+  }
+}
 async function lockVault() {
   await flushEditors();
+  autoBackup(true);
   vault.lock();
   quick?.hide();
   notify();
@@ -271,7 +288,12 @@ app
     } catch {
       settings = {};
     }
-    settings = { theme: "dark", hotkey: "Control+Alt+K", ...settings };
+    settings = {
+      theme: "dark",
+      hotkey: "Control+Alt+K",
+      autoBackup: true,
+      ...settings,
+    };
     session.defaultSession.setPermissionRequestHandler((_wc, _p, cb) =>
       cb(false),
     );
@@ -286,10 +308,15 @@ app
         log.record("renderer.connected");
         rendererConnected = true;
       }
-      return { exists: vault.exists, unlocked: !!vault.repo, settings };
+      return {
+        exists: vault.exists,
+        unlocked: !!vault.repo,
+        settings: { ...settings, backupDir: backupDir() },
+      };
     });
     handle("unlock", async (_e, password) => {
       await vault.unlock(password);
+      autoBackup();
       notify();
       return vault.repo.snapshot();
     });
@@ -299,6 +326,8 @@ app
     handle("command", (_e, c, a) => {
       unlocked();
       const result = vault.command(c, a);
+      // Covers sessions that stay unlocked past midnight.
+      autoBackup();
       notify();
       return result;
     });
@@ -307,8 +336,15 @@ app
         throw Error("Ungültiges Erscheinungsbild.");
       if (typeof values.hotkey !== "string" || values.hotkey.length > 100)
         throw Error("Ungültiges Tastenkürzel.");
+      if (typeof values.autoBackup !== "boolean")
+        throw Error("Ungültige Sicherungseinstellung.");
       if (values.hotkey !== settings.hotkey) registerHotkey(values.hotkey);
-      settings = { theme: values.theme, hotkey: values.hotkey };
+      settings = {
+        theme: values.theme,
+        hotkey: values.hotkey,
+        autoBackup: values.autoBackup,
+        lastBackup: settings.lastBackup,
+      };
       atomicWrite(settingsFile, Buffer.from(JSON.stringify(settings)));
       notify();
       return settings;
@@ -386,6 +422,11 @@ app
       if (d.canceled) return false;
       vault.backup(d.filePath);
       return true;
+    });
+    handle("openBackupDir", async () => {
+      fs.mkdirSync(backupDir(), { recursive: true });
+      const error = await shell.openPath(backupDir());
+      if (error) throw Error(error);
     });
     handle("restore", async (e, password) => {
       const choice = await dialog.showMessageBox(parent(e), {
@@ -546,6 +587,7 @@ app.on("before-quit", (e) => {
   quittingPending = true;
   flushEditors()
     .then(() => {
+      autoBackup(true);
       quitting = true;
       app.quit();
     })
