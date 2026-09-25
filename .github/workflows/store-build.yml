@@ -27,7 +27,7 @@ jobs:
         shell: powershell
         run: ./scripts/build-store.ps1
       - name: Upload Store bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Kontor-Store-x64
           path: Kontor-Windows/release/store/*
