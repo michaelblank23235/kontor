@@ -95,7 +95,21 @@ async function until(fn) {
     // Enter created the folder without closing the editor.
     await p.getByLabel("Name des neuen Ordners").waitFor({ state: "detached" });
     await p.getByRole("textbox", { name: "Notiztext", exact: true }).waitFor();
+    // A second new folder defaults to a subfolder of the note's current folder.
+    await p.locator(".modal").getByLabel(/^Ordner/).selectOption("__new");
+    const parentSelect = p.getByLabel("Anlegen in", { exact: true });
+    const deutsch = (await p.evaluate(() => window.kontor.snapshot())).folder.find(
+      (x) => x.name === "Fachschaft Deutsch",
+    );
+    assert.equal(await parentSelect.inputValue(), deutsch.id);
+    await p.getByLabel("Name des neuen Ordners").fill("Klasse 7");
     await p.screenshot({ path: "test-results/new-folder.png" });
+    await p.getByRole("button", { name: "Anlegen", exact: true }).click();
+    await until(async () => {
+      const s = await p.evaluate(() => window.kontor.snapshot());
+      const f = s.folder.find((x) => x.name === "Klasse 7");
+      return f && f.parentId === deutsch.id && s.note[0].folderId === f.id;
+    });
     await p.keyboard.press("Escape");
     await p.getByRole("button", { name: "Bearbeiten", exact: true }).waitFor();
     // Archive/reactivate and pin.

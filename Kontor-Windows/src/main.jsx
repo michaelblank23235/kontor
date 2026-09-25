@@ -853,8 +853,8 @@ function App() {
           {...editor}
           data={data}
           onClose={() => setEditor(null)}
-          onCreateFolder={(name) =>
-            command("save", { kind: "folder", item: { name } })
+          onCreateFolder={(name, parentId) =>
+            command("save", { kind: "folder", item: { name, parentId } })
           }
           autosave={!editor.inboxId}
           onPersist={(value) =>
@@ -1094,10 +1094,10 @@ function EditDialog({
     [saveState, setSaveState] = useState(""),
     [newFolder, setNewFolder] = useState(null);
   async function createFolder() {
-    const name = newFolder.trim();
+    const name = newFolder.name.trim();
     if (!name) return;
     try {
-      const folder = await onCreateFolder(name);
+      const folder = await onCreateFolder(name, newFolder.parentId);
       set("folderId", folder.id);
       setNewFolder(null);
     } catch (e) {
@@ -1333,7 +1333,12 @@ function EditDialog({
                 <select
                   value={newFolder !== null ? "__new" : draft.folderId || ""}
                   onChange={(e) => {
-                    if (e.target.value === "__new") return setNewFolder("");
+                    // Default parent: the folder the note is in right now.
+                    if (e.target.value === "__new")
+                      return setNewFolder({
+                        name: "",
+                        parentId: draft.folderId || null,
+                      });
                     setNewFolder(null);
                     set("folderId", e.target.value || null);
                   }}
@@ -1350,8 +1355,10 @@ function EditDialog({
                     aria-label="Name des neuen Ordners"
                     placeholder="Zum Beispiel: Fachschaft Deutsch"
                     maxLength={150}
-                    value={newFolder}
-                    onChange={(e) => setNewFolder(e.target.value)}
+                    value={newFolder.name}
+                    onChange={(e) =>
+                      setNewFolder({ ...newFolder, name: e.target.value })
+                    }
                     onKeyDown={(e) => {
                       // Enter must not submit the whole note form.
                       if (e.key === "Enter") {
@@ -1364,10 +1371,25 @@ function EditDialog({
                       }
                     }}
                   />
+                  <span className="muted">in</span>
+                  <select
+                    aria-label="Anlegen in"
+                    title="Anlegen in"
+                    value={newFolder.parentId || ""}
+                    onChange={(e) =>
+                      setNewFolder({
+                        ...newFolder,
+                        parentId: e.target.value || null,
+                      })
+                    }
+                  >
+                    <option value="">Oberste Ebene</option>
+                    <FolderOptions folders={data.folder} />
+                  </select>
                   <button
                     type="button"
                     className="primary"
-                    disabled={!newFolder.trim()}
+                    disabled={!newFolder.name.trim()}
                     onClick={createFolder}
                   >
                     Anlegen
