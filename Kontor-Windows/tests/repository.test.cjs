@@ -49,6 +49,72 @@ test("Person umbenennen und zusammenführen", async () => {
   assert.throws(() => r.renamePerson("Niemand", "X"), /nicht gefunden/);
   assert.throws(() => r.renamePerson("Frau Meyer", " "), /Namen/);
 });
+test("Schuljahresabschluss archiviert nur Altes; Angepinntes und Offenes bleibt", async () => {
+  const r = await setup();
+  const old = "2025-06-01T10:00:00.000Z";
+  const e1 = r.save("entry", { subject: "Alt", date: old });
+  const e2 = r.save("entry", { subject: "Neu", date: "2025-09-01T10:00:00.000Z" });
+  const n1 = r.put("note", { ...r.save("note", { title: "Alt" }), updatedAt: old });
+  const n2 = r.put("note", {
+    ...r.save("note", { title: "Gepinnt" }),
+    updatedAt: old,
+    pinnedAt: old,
+  });
+  const t1 = r.put("todo", {
+    ...r.save("todo", { title: "Erledigt" }),
+    status: "Erledigt",
+    completedAt: old,
+  });
+  const t2 = r.put("todo", { ...r.save("todo", { title: "Offen" }), createdAt: old });
+  const c = r.archiveCandidates("2025-08-01T00:00:00.000Z");
+  assert.deepEqual(
+    [c.entry, c.note, c.todo].map((l) => l.map((x) => x.id)),
+    [[e1.id], [n1.id], [t1.id]],
+  );
+  assert.equal(r.archiveBefore("2025-08-01T00:00:00.000Z", ["entry", "todo"]), 2);
+  assert.ok(r.get("entry", e1.id).archivedAt);
+  assert.ok(r.get("todo", t1.id).archivedAt);
+  for (const [k, x] of [["entry", e2], ["note", n1], ["note", n2], ["todo", t2]])
+    assert.equal(r.get(k, x.id).archivedAt, null);
+  assert.throws(() => r.archiveBefore("2025-08-01", ["folder"]), /Ungültige/);
+});
+test("Löschfristen: aus, dann Vorschläge ohne offene Aufgaben, Löschen in einem Schritt", async () => {
+  const r = await setup();
+  const at = new Date("2026-09-25T12:00:00.000Z");
+  const e = r.save("entry", {
+    subject: "Sehr alt",
+    date: "2020-01-10T10:00:00.000Z",
+    agreements: [{ text: "Nachfassen" }],
+  });
+  r.save("entry", { subject: "Jung", date: "2025-01-10T10:00:00.000Z" });
+  const task = r.get("todo", e.agreements[0].taskId);
+  r.put("todo", { ...task, createdAt: "2020-01-10T10:00:00.000Z" });
+  const done = r.put("todo", {
+    ...r.save("todo", { title: "Erledigt alt" }),
+    status: "Erledigt",
+    completedAt: "2019-05-01T10:00:00.000Z",
+    archivedAt: "2020-01-01T10:00:00.000Z",
+  });
+  assert.deepEqual(r.retentionCandidates(at), []);
+  r.setRetention(5);
+  assert.equal(r.retentionYears(), 5);
+  const due = r.retentionCandidates(at);
+  assert.deepEqual(
+    due.map((d) => [d.kind, d.title, d.archived]),
+    [
+      ["todo", "Erledigt alt", true],
+      ["entry", "Sehr alt", false],
+    ],
+  );
+  assert.equal(r.deleteMany(due), 2);
+  assert.equal(r.get("entry", e.id), null);
+  assert.equal(r.get("todo", done.id), null);
+  // The open agreement task survives, now without its origin.
+  assert.equal(r.get("todo", task.id).entryId, null);
+  assert.throws(() => r.setRetention(0), /Aufbewahrungsfrist/);
+  r.setRetention(null);
+  assert.equal(r.retentionYears(), null);
+});
 test("Verschieben: ohne Datum eine Woche, mit Datum genau dorthin", async () => {
   const r = await setup();
   const t = r.save("todo", {

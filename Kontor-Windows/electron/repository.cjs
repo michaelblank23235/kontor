@@ -1,5 +1,6 @@
 const { randomUUID } = require("node:crypto");
 const kinds = ["entry", "note", "todo", "inbox", "folder"];
+const itemKinds = ["entry", "note", "todo"];
 // Defaults until the user edits the list; stored in meta.entryTypes afterwards.
 const defaultTypes = [
   {
@@ -192,10 +193,91 @@ class Repository {
     if (!changed) throw Error("Diese Person wurde nicht gefunden.");
     return changed;
   }
+  // What archiving at a school-year cut-off would touch: conversations held,
+  // notes last changed and tasks completed before that day. Pinned notes and
+  // open tasks stay active.
+  archiveCandidates(before) {
+    before = date(before, false);
+    const active = (k) => this.all(k).filter((x) => !x.archivedAt);
+    return {
+      entry: active("entry").filter((e) => e.date < before),
+      note: active("note").filter((n) => !n.pinnedAt && n.updatedAt < before),
+      todo: active("todo").filter(
+        (t) => t.status === "Erledigt" && (t.completedAt || t.createdAt) < before,
+      ),
+    };
+  }
+  archiveBefore(before, chosen) {
+    if (!Array.isArray(chosen) || !chosen.every((k) => itemKinds.includes(k)))
+      throw Error("Ungültige Auswahl.");
+    const candidates = this.archiveCandidates(before);
+    let count = 0;
+    for (const kind of chosen)
+      for (const x of candidates[kind]) {
+        this.put(kind, { ...x, archivedAt: now() });
+        count++;
+      }
+    return count;
+  }
+  retentionYears() {
+    const v = this.query("SELECT value FROM meta WHERE key=?", [
+      "retentionYears",
+    ])[0]?.value;
+    return v ? Number(v) : null;
+  }
+  setRetention(years) {
+    if (years !== null && !(Number.isInteger(years) && years >= 1 && years <= 30))
+      throw Error("Ungültige Aufbewahrungsfrist.");
+    if (years === null)
+      this.db.run("DELETE FROM meta WHERE key='retentionYears'");
+    else
+      this.db.run("INSERT OR REPLACE INTO meta VALUES ('retentionYears',?)", [
+        String(years),
+      ]);
+    return years;
+  }
+  // Everything past the retention period, archived or not, except open tasks.
+  retentionCandidates(at = new Date()) {
+    const years = this.retentionYears();
+    if (!years) return [];
+    const limit = new Date(at);
+    limit.setFullYear(limit.getFullYear() - years);
+    const cutoff = limit.toISOString();
+    const age = {
+      entry: (e) => e.date,
+      note: (n) => n.updatedAt,
+      todo: (t) => (t.status === "Erledigt" ? t.completedAt || t.createdAt : null),
+    };
+    return itemKinds
+      .flatMap((kind) =>
+        this.all(kind).map((x) => ({ kind, x, when: age[kind](x) })),
+      )
+      .filter((c) => c.when && c.when < cutoff)
+      .sort((a, b) => a.when.localeCompare(b.when))
+      .map(({ kind, x, when }) => ({
+        kind,
+        id: x.id,
+        title: x.subject || x.title || "Ohne Titel",
+        date: when,
+        archived: !!x.archivedAt,
+      }));
+  }
+  deleteMany(items) {
+    if (!Array.isArray(items) || items.length > 10000)
+      throw Error("Ungültige Auswahl.");
+    for (const { kind, id: key } of items) {
+      if (!itemKinds.includes(kind)) throw Error("Ungültige Auswahl.");
+      // Earlier deletions can already have removed linked records.
+      if (this.get(kind, key)) this.remove(kind, key);
+    }
+    return items.length;
+  }
   snapshot() {
     return {
       ...Object.fromEntries(kinds.map((k) => [k, this.all(k)])),
       types: this.types(),
+      retentionYears: this.retentionYears(),
+      retentionDue: this.retentionCandidates().length,
       links: this.query("SELECT * FROM link"),
       attachments: this.query(
         "SELECT id,noteId,filename,mime,length(data) AS byteCount FROM attachment",
@@ -494,6 +576,12 @@ class Repository {
         return this.saveTypes(args.types);
       case "renamePerson":
         return this.renamePerson(args.from, args.to);
+      case "archiveBefore":
+        return this.archiveBefore(args.before, args.kinds);
+      case "setRetention":
+        return this.setRetention(args.years);
+      case "deleteMany":
+        return this.deleteMany(args.items);
       case "removeAttachment":
         this.db.run("DELETE FROM attachment WHERE id=?", [args.id]);
         return;

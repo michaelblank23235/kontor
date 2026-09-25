@@ -27,7 +27,8 @@ Beim ersten Start eine PIN aus genau vier Ziffern vergeben (führende Nullen sin
 - Bild-/PDF-Anhänge bis 30 MB pro Datei mit Vorschau und Export. Anhänge sind Bestandteil der Datenbank und ihrer Sicherung.
 - Beidseitige Verknüpfungen zwischen Gesprächen, Aufgaben und Notizen.
 - Personenansicht mit Gesprächshistorie und zugehörigen Notizen; globale Suche einschließlich Archiv.
-- PDF-Export für Gespräche, Notizen, Aufgaben und Personenakten.
+- Export für Gespräche, Notizen, Aufgaben und Personenakten als PDF, Word (.docx) oder Markdown sowie direktes Drucken. „Alles als Dateien exportieren“ legt den gesamten Bestand samt Anhängen als lesbare Markdown-Dateien in einem gewählten Ordner ab.
+- Aufräumen: Schuljahresabschluss archiviert Gespräche, Notizen und erledigte Aufgaben vor einem Stichtag (Standard: 1. August). Eine optionale Aufbewahrungsfrist listet Einträge, die älter sind, zum gezielten endgültigen Löschen; offene Aufgaben sind ausgenommen, gelöscht wird nur nach Bestätigung. Frist und Gesprächstypen liegen in der verschlüsselten Datenbank.
 - Inbox mit Umwandlung in Gespräche, Aufgaben oder Notizen; separates Schnellerfassungsfenster, globales Tastenkürzel und Symbol im Infobereich.
 - Dunkles/helles/systemabhängiges Erscheinungsbild, Sperren, verschlüsselte Sicherung und Wiederherstellung.
 - Automatische Sicherung (abschaltbar): einmal täglich nach dem Entsperren sowie beim Sperren und Beenden nach `Dokumente\Kontor-Sicherungen`. Die Dateien heißen `Kontor-Auto-JJJJ-MM-TT.kontorbackup`; die neuesten 14 bleiben erhalten, andere Dateien im Ordner werden nicht angefasst.
@@ -40,7 +41,7 @@ Die Anwendung lädt keine externen Inhalte, enthält keine Telemetrie und benöt
 
 Der Desktop-Hauptprozess verwaltet eine SQLite-Datenbank über `sql.js`. Auf dem Datenträger liegt ausschließlich ein mit AES-256-GCM verschlüsseltes Datenbankabbild (`kontor.kontorvault`). Der Schlüssel wird mit scrypt aus der PIN (bei alten Daten der Passphrase) und einem zufälligen Salt abgeleitet. Änderungen werden transaktional ausgeführt und über eine temporäre Datei atomar ersetzt. Schreibfehler rollen den Speicherstand zurück.
 
-Der Standardpfad liegt im Benutzerprofil unter `%APPDATA%\kontor-windows`. Erscheinungsbild, Tastenkürzel und die Sicherungseinstellung stehen getrennt in `settings.json`. Automatische Sicherungen sind wie die Datenbank mit der PIN verschlüsselt; liegt der Dokumente-Ordner in OneDrive, landen sie verschlüsselt in der Cloud. Vor dem Import einer Sicherung wird der aktuelle Datenbestand unter `kontor.kontorvault.vor-import.kontorbackup` gesichert. Exportierte PDF-Dateien und einzeln gespeicherte Anhänge sind normale, unverschlüsselte Dateien am selbst gewählten Speicherort.
+Der Standardpfad liegt im Benutzerprofil unter `%APPDATA%\kontor-windows`. Erscheinungsbild, Tastenkürzel und die Sicherungseinstellung stehen getrennt in `settings.json`. Automatische Sicherungen sind wie die Datenbank mit der PIN verschlüsselt; liegt der Dokumente-Ordner in OneDrive, landen sie verschlüsselt in der Cloud. Vor dem Import einer Sicherung wird der aktuelle Datenbestand unter `kontor.kontorvault.vor-import.kontorbackup` gesichert. Exportierte PDF-, Word- und Markdown-Dateien, der Gesamtexport und einzeln gespeicherte Anhänge sind normale, unverschlüsselte Dateien am selbst gewählten Speicherort. Endgültig gelöschte Einträge bleiben in älteren Sicherungen enthalten, bis diese überschrieben oder gelöscht werden.
 
 ## Entwicklung auf dem Mac
 

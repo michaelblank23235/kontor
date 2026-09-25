@@ -117,6 +117,49 @@ const matches = (x, q) =>
       ...(x.tags || []),
     ].join(" "),
   ).includes(words(q));
+function ExportMenu({ kind, id, action }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef();
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => !root.current?.contains(e.target) && setOpen(false);
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  const items = [
+    ["PDF", () => api.exportPDF(kind, id)],
+    ["Word (.docx)", () => api.exportAs(kind, id, "docx")],
+    ["Markdown (.md)", () => api.exportAs(kind, id, "md")],
+    ["Drucken …", () => api.print(kind, id)],
+  ];
+  return (
+    <div className="export-menu" ref={root}>
+      <IconButton
+        icon={FileDown}
+        label="Exportieren oder drucken"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      />
+      {open && (
+        <div className="menu" role="menu">
+          {items.map(([label, run]) => (
+            <button
+              key={label}
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                action(run);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 function IconButton({ icon: Icon, label, ...props }) {
   return (
     <button
@@ -497,6 +540,7 @@ function App() {
             refresh={refresh}
             data={data}
             command={command}
+            ask={ask}
           />
         ) : section === "inbox" ? (
           <InboxPanel {...tools} />
@@ -747,13 +791,7 @@ function App() {
                       <Pencil size={15} />
                       Bearbeiten
                     </button>
-                    <IconButton
-                      icon={FileDown}
-                      label="PDF exportieren"
-                      onClick={() =>
-                        action(() => api.exportPDF(section, item.id))
-                      }
-                    />
+                    <ExportMenu kind={section} id={item.id} action={action} />
                     <IconButton
                       icon={Archive}
                       label={item.archivedAt ? "Reaktivieren" : "Archivieren"}
@@ -1855,6 +1893,24 @@ function Dashboard({ data, navigate, create }) {
         <h1>Alles im Blick.</h1>
         <p>Platz für klare Gedanken und die nächsten Schritte.</p>
       </div>
+      {data.retentionDue > 0 && (
+        <button
+          className="retention-hint"
+          onClick={() => {
+            navigate("settings");
+            setTimeout(() =>
+              document.getElementById("cleanup")?.scrollIntoView(),
+            );
+          }}
+        >
+          <Archive size={16} />
+          {data.retentionDue === 1
+            ? "1 Eintrag hat die Aufbewahrungsfrist überschritten."
+            : `${data.retentionDue} Einträge haben die Aufbewahrungsfrist überschritten.`}
+          <span>Prüfen</span>
+          <ChevronRight size={15} />
+        </button>
+      )}
       <div className="stats-grid">
         {[
           [CheckCheck, "Offene Aufgaben", active.length, "todo"],
@@ -2173,12 +2229,7 @@ function Persons({ people, data, navigate, action, command, ask }) {
           <article className="detail">
             <div className="section-heading">
               <span className="eyebrow">PERSONENAKTE</span>
-              <button
-                onClick={() => action(() => api.exportPDF("person", person))}
-              >
-                <FileDown size={15} />
-                PDF exportieren
-              </button>
+              <ExportMenu kind="person" id={person} action={action} />
             </div>
             {rename === null ? (
               <div className="person-title">
@@ -2841,7 +2892,193 @@ function TypeSettings({ data, command, action }) {
     </section>
   );
 }
-function SettingsPanel({ status, action, refresh, data, command }) {
+// Default cut-off: the most recent 1 August, roughly the start of a school year.
+function schoolYearStart() {
+  const d = new Date();
+  const year = d.getMonth() >= 7 ? d.getFullYear() : d.getFullYear() - 1;
+  return `${year}-08-01`;
+}
+function CleanupSettings({ data, command, action, ask }) {
+  const [before, setBefore] = useState(schoolYearStart),
+    [chosen, setChosen] = useState(["entry", "note", "todo"]),
+    [preview, setPreview] = useState(null),
+    [skip, setSkip] = useState([]),
+    [result, setResult] = useState("");
+  const beforeIso = before ? new Date(before + "T00:00:00").toISOString() : null;
+  useEffect(() => {
+    if (!beforeIso) return;
+    let live = true;
+    api
+      .cleanupPreview(beforeIso)
+      .then((p) => live && setPreview(p))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [beforeIso, data]);
+  const labels = {
+    entry: "Gespräche vor dem Stichtag",
+    note: "Notizen, zuletzt vor dem Stichtag geändert (ohne angepinnte)",
+    todo: "Erledigte Aufgaben",
+  };
+  const kindLabel = { entry: "Gespräch", note: "Notiz", todo: "Aufgabe" };
+  const archiveCount = preview
+    ? chosen.reduce((n, k) => n + preview.archive[k], 0)
+    : 0;
+  const due = (preview?.retention || []).filter(
+    (d) => !skip.includes(d.kind + d.id),
+  );
+  return (
+    <section className="card" id="cleanup">
+      <h2>
+        <Archive size={19} /> Aufräumen
+      </h2>
+      <h3>Schuljahresabschluss</h3>
+      <p className="small muted">
+        Verschiebt Altes ins Archiv. Archiviertes bleibt durchsuchbar und lässt
+        sich jederzeit reaktivieren.
+      </p>
+      <label>
+        Stichtag
+        <input
+          type="date"
+          aria-label="Stichtag"
+          value={before}
+          onChange={(e) => setBefore(e.target.value)}
+        />
+      </label>
+      {preview &&
+        ["entry", "note", "todo"].map((k) => (
+          <label className="check-line" key={k}>
+            <input
+              type="checkbox"
+              checked={chosen.includes(k)}
+              onChange={(e) =>
+                setChosen((c) =>
+                  e.target.checked ? [...c, k] : c.filter((x) => x !== k),
+                )
+              }
+            />
+            {labels[k]}: {preview.archive[k]}
+          </label>
+        ))}
+      <div className="settings-buttons">
+        <button
+          disabled={!archiveCount}
+          onClick={() =>
+            ask(`${archiveCount} Einträge ins Archiv verschieben?`, () =>
+              action(async () => {
+                const n = await command("archiveBefore", {
+                  before: beforeIso,
+                  kinds: chosen,
+                });
+                setResult(`${n} Einträge archiviert.`);
+              }),
+            )
+          }
+        >
+          <Archive size={16} />
+          {archiveCount
+            ? `${archiveCount} Einträge archivieren`
+            : "Nichts zu archivieren"}
+        </button>
+      </div>
+      <div className="settings-divider" />
+      <h3>Löschfristen</h3>
+      <div className="settings-line">
+        <div>
+          <strong>Aufbewahrungsfrist</strong>
+          <p>
+            Kontor schlägt vor, was älter ist, und löscht nie ohne Ihre
+            Bestätigung. Offene Aufgaben sind ausgenommen.
+          </p>
+        </div>
+        <select
+          aria-label="Aufbewahrungsfrist"
+          value={data.retentionYears || ""}
+          onChange={(e) =>
+            action(() =>
+              command("setRetention", {
+                years: e.target.value ? Number(e.target.value) : null,
+              }),
+            )
+          }
+        >
+          <option value="">Keine Frist</option>
+          {[1, 2, 3, 4, 5, 6, 10].map((y) => (
+            <option key={y} value={y}>
+              {y === 1 ? "1 Jahr" : `${y} Jahre`}
+            </option>
+          ))}
+        </select>
+      </div>
+      {data.retentionYears && preview && (
+        <>
+          {preview.retention.length === 0 ? (
+            <p className="small muted">Nichts ist älter als die Frist.</p>
+          ) : (
+            <div className="retention-list">
+              {preview.retention.map((d) => (
+                <label className="check-line" key={d.kind + d.id}>
+                  <input
+                    type="checkbox"
+                    aria-label={`${d.title} löschen`}
+                    checked={!skip.includes(d.kind + d.id)}
+                    onChange={(e) =>
+                      setSkip((s) =>
+                        e.target.checked
+                          ? s.filter((x) => x !== d.kind + d.id)
+                          : [...s, d.kind + d.id],
+                      )
+                    }
+                  />
+                  <span>
+                    {d.title}
+                    <small>
+                      {" "}
+                      · {kindLabel[d.kind]} · {fmt(d.date)}
+                      {d.archived ? " · Archiv" : ""}
+                    </small>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          {preview.retention.length > 0 && (
+            <div className="settings-buttons">
+              <button
+                className="destructive"
+                disabled={!due.length}
+                onClick={() =>
+                  ask(
+                    `${due.length} Einträge endgültig löschen? Das lässt sich in Kontor nicht rückgängig machen. Ältere Sicherungen enthalten sie noch, bis diese überschrieben oder gelöscht werden.`,
+                    () =>
+                      action(async () => {
+                        const n = await command("deleteMany", {
+                          items: due.map(({ kind, id }) => ({ kind, id })),
+                        });
+                        setSkip([]);
+                        setResult(`${n} Einträge endgültig gelöscht.`);
+                      }),
+                  )
+                }
+              >
+                <Trash2 size={16} />
+                {due.length} ausgewählte endgültig löschen
+              </button>
+            </div>
+          )}
+        </>
+      )}
+      {result && (
+        <p role="status" className="success">
+          {result}
+        </p>
+      )}
+    </section>
+  );
+}
+function SettingsPanel({ status, action, refresh, data, command, ask }) {
   const [settings, setSettings] = useState(status.settings),
     [password, setPassword] = useState(""),
     [message, setMessage] = useState("");
@@ -3006,7 +3243,26 @@ function SettingsPanel({ status, action, refresh, data, command }) {
             <Download size={16} />
             Sicherung exportieren
           </button>
+          <button
+            onClick={() =>
+              action(async () => {
+                const r = await api.exportAll();
+                if (r)
+                  setMessage(
+                    `${r.count} Einträge als lesbare Dateien exportiert nach ${r.target}.`,
+                  );
+              })
+            }
+          >
+            <FileDown size={16} />
+            Alles als Dateien exportieren
+          </button>
         </div>
+        <p className="hint">
+          „Alles als Dateien exportieren“ legt Gespräche, Notizen, Aufgaben und
+          Anhänge als normale Markdown-Dateien ab, die sich ohne Kontor öffnen
+          lassen. Diese Dateien sind nicht verschlüsselt.
+        </p>
         <div className="settings-divider" />
         <h3>Sicherung wiederherstellen</h3>
         <p className="small muted">
@@ -3039,6 +3295,12 @@ function SettingsPanel({ status, action, refresh, data, command }) {
           Sicherung auswählen und importieren
         </button>
       </section>
+      <CleanupSettings
+        data={data}
+        command={command}
+        action={action}
+        ask={ask}
+      />
       <section className="card">
         <h2>
           <Keyboard size={19} /> Schnell zum Ziel

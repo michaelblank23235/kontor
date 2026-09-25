@@ -16,6 +16,7 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { Vault, atomicWrite } = require("./vault.cjs");
 const { optionalStartup } = require("./startup.cjs");
+const { markdownFor, docxFor, exportAll } = require("./exporter.cjs");
 const { log, fatal } = global.kontorStartup;
 log.record("main.loaded");
 // Packaged Store apps use the identity assigned by Windows.
@@ -249,6 +250,34 @@ const esc = (s) =>
         c
       ],
   );
+function exportName(kind, key) {
+  if (kind === "person") return safeName("Personenakte " + key);
+  const x = unlocked().require(kind, key);
+  return safeName(x.subject || x.title || "Kontor");
+}
+// Renders the export HTML in a hidden, sandboxed window without network access.
+async function withReport(kind, key, work) {
+  const content = printContent(kind, key);
+  const report = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      sandbox: true,
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+  try {
+    await report.loadURL(
+      "data:text/html;charset=utf-8," +
+        encodeURIComponent(
+          `<!doctype html><html lang="de"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>body{font:12px system-ui;color:#24202c;line-height:1.6}h1{font-size:23px;margin-top:24px}h2{font-size:17px}.text{white-space:pre-wrap;overflow-wrap:anywhere}p{break-inside:avoid}</style><header>KONTOR · Dokumentation</header>${content}</html>`,
+        ),
+    );
+    return await work(report);
+  } finally {
+    report.destroy();
+  }
+}
 function printContent(kind, key) {
   const r = unlocked();
   const section = (title, body) => `<h1>${esc(title)}</h1>${body}`;
@@ -458,6 +487,15 @@ app
       vault.backup(d.filePath);
       return true;
     });
+    // Read-only preview for the cleanup settings; does not rewrite the vault.
+    handle("cleanupPreview", (_e, before) => {
+      const r = unlocked();
+      const c = r.archiveCandidates(before);
+      return {
+        archive: { entry: c.entry.length, note: c.note.length, todo: c.todo.length },
+        retention: r.retentionCandidates(),
+      };
+    });
     handle("openStartupSettings", () =>
       shell.openExternal("ms-settings:startupapps"),
     );
@@ -489,37 +527,67 @@ app
       return true;
     });
     handle("exportPDF", async (e, kind, key) => {
-      const content = printContent(kind, key);
       const d = await dialog.showSaveDialog(parent(e), {
-        defaultPath: "Kontor.pdf",
+        defaultPath: exportName(kind, key) + ".pdf",
         filters: [{ name: "PDF", extensions: ["pdf"] }],
       });
       if (d.canceled) return false;
-      const report = new BrowserWindow({
-        show: false,
-        webPreferences: {
-          sandbox: true,
-          nodeIntegration: false,
-          contextIsolation: true,
-        },
-      });
-      try {
-        await report.loadURL(
-          "data:text/html;charset=utf-8," +
-            encodeURIComponent(
-              `<!doctype html><html lang="de"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>body{font:12px system-ui;color:#24202c;line-height:1.6}h1{font-size:23px;margin-top:24px}h2{font-size:17px}.text{white-space:pre-wrap;overflow-wrap:anywhere}p{break-inside:avoid}</style><header>KONTOR · Dokumentation</header>${content}</html>`,
-            ),
-        );
+      await withReport(kind, key, async (report) => {
         const bytes = await report.webContents.printToPDF({
           pageSize: "A4",
           printBackground: true,
           margins: { top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 },
         });
         atomicWrite(d.filePath, bytes);
-        return true;
-      } finally {
-        report.destroy();
-      }
+      });
+      return true;
+    });
+    handle("exportAs", async (e, kind, key, format) => {
+      if (!["md", "docx"].includes(format)) throw Error("Ungültiges Format.");
+      const md = markdownFor(unlocked(), kind, key);
+      const d = await dialog.showSaveDialog(parent(e), {
+        defaultPath: `${exportName(kind, key)}.${format}`,
+        filters: [
+          format === "md"
+            ? { name: "Markdown", extensions: ["md"] }
+            : { name: "Word-Dokument", extensions: ["docx"] },
+        ],
+      });
+      if (d.canceled) return false;
+      atomicWrite(
+        d.filePath,
+        format === "md" ? Buffer.from(md + "\n") : await docxFor(md),
+      );
+      return true;
+    });
+    handle("print", (_e, kind, key) =>
+      withReport(
+        kind,
+        key,
+        (report) =>
+          new Promise((resolve, reject) =>
+            report.webContents.print({ silent: false }, (ok, reason) =>
+              ok || reason === "cancelled"
+                ? resolve(ok)
+                : reject(Error("Drucken fehlgeschlagen: " + reason)),
+            ),
+          ),
+      ),
+    );
+    handle("exportAll", async (e) => {
+      const r = unlocked();
+      const d = await dialog.showOpenDialog(parent(e), {
+        title: "Ordner für den Export wählen",
+        properties: ["openDirectory", "createDirectory"],
+      });
+      if (d.canceled) return false;
+      const target = path.join(
+        d.filePaths[0],
+        `Kontor-Export-${new Date().toLocaleDateString("sv-SE")}`,
+      );
+      const count = exportAll(r, target);
+      if (!testMode) shell.openPath(target);
+      return { count, target };
     });
     handle("external", async (_e, url) => {
       const u = new URL(url);

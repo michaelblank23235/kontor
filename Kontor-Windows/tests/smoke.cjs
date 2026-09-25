@@ -15,6 +15,10 @@ const path = require("node:path");
     });
     const p = await app.firstWindow();
     p.on("pageerror", (e) => errors.push(e.message));
+    // Typing before the first render settles occasionally lost the first PIN.
+    await p.waitForFunction(
+      () => document.documentElement.dataset.kontorReady === "true",
+    );
     await p.getByLabel(/^PIN(?: oder bisherige Passphrase)?$/).fill("0123");
     await p.getByLabel("PIN wiederholen").fill("0123");
     await p.getByRole("button", { name: "Arbeitsplatz einrichten" }).click();

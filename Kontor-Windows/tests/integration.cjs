@@ -21,6 +21,10 @@ async function until(fn) {
     });
     const p = await app.firstWindow();
     p.on("pageerror", (e) => errors.push(e.message));
+    // Typing before the first render settles occasionally lost the first PIN.
+    await p.waitForFunction(
+      () => document.documentElement.dataset.kontorReady === "true",
+    );
     await p.getByLabel(/^PIN(?: oder bisherige Passphrase)?$/).fill("0123");
     await p.getByLabel("PIN wiederholen").fill("0123");
     await p.getByRole("button", { name: "Arbeitsplatz einrichten" }).click();
@@ -263,7 +267,96 @@ async function until(fn) {
     assert.equal(konferenz.type, "Klassenkonferenz");
     assert.ok(konferenz.body.includes("Tagesordnung"));
     assert.deepEqual(konferenz.participants, ["Max Müller"]);
+    // Export menu: Word and Markdown through the real save path.
+    await p.getByRole("button", { name: "Gespräche", exact: true }).click();
+    await p.getByRole("button").filter({ hasText: "Konferenz 7b" }).first().click();
+    const exportTo = async (label, file) => {
+      await app.evaluate(({ dialog }, f) => {
+        dialog.showSaveDialog = async () => ({ canceled: false, filePath: f });
+      }, file);
+      await p.getByRole("button", { name: "Exportieren oder drucken" }).click();
+      await p.getByRole("menuitem", { name: label }).click();
+      await until(() => fs.existsSync(file));
+    };
+    const word = path.join(dir, "konferenz.docx");
+    await exportTo("Word (.docx)", word);
+    assert.equal(fs.readFileSync(word).subarray(0, 2).toString(), "PK");
+    const md = path.join(dir, "konferenz.md");
+    await exportTo("Markdown (.md)", md);
+    const mdText = fs.readFileSync(md, "utf8");
+    assert.match(mdText, /^# Konferenz 7b/);
+    assert.match(mdText, /\*\*Typ:\*\* Klassenkonferenz/);
+    assert.match(mdText, /## Tagesordnung/);
+    // Printing renders the same document; the native dialog is stubbed here.
+    await app.evaluate(({ BrowserWindow }) => {
+      const proto = Object.getPrototypeOf(BrowserWindow.getAllWindows()[0].webContents);
+      const original = proto.print;
+      let printed = null;
+      proto.print = function (_options, done) {
+        this.executeJavaScript("document.body.innerText").then((t) => {
+          printed = t;
+          done(true);
+        });
+      };
+      globalThis.printedText = () => printed;
+      globalThis.restorePrint = () => {
+        proto.print = original;
+      };
+    });
+    await p.getByRole("button", { name: "Exportieren oder drucken" }).click();
+    await p.getByRole("menuitem", { name: "Drucken …" }).click();
+    await until(() => app.evaluate(() => globalThis.printedText() !== null));
+    const printed = await app.evaluate(() => globalThis.printedText());
+    await app.evaluate(() => globalThis.restorePrint());
+    assert.match(printed, /Konferenz 7b/);
+    assert.match(printed, /Klassenkonferenz/);
+    // Full export into a chosen folder.
+    const exportParent = path.join(dir, "export-ziel");
+    fs.mkdirSync(exportParent);
+    await app.evaluate(({ dialog }, f) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] });
+    }, exportParent);
+    const all = await p.evaluate(() => window.kontor.exportAll());
+    assert.ok(all.count > 3);
+    assert.ok(fs.existsSync(path.join(all.target, "Gespräche")));
+    assert.ok(fs.existsSync(path.join(all.target, "Aufgaben.md")));
+    // School-year archive and retention with an old conversation.
+    await p.evaluate(() =>
+      window.kontor.command("save", {
+        kind: "entry",
+        item: { subject: "Uraltes Gespräch", date: "2019-03-01T10:00:00.000Z" },
+      }),
+    );
     await p.getByRole("button", { name: "Einstellungen", exact: true }).click();
+    await p.getByRole("button", { name: /^1 Einträge archivieren$/ }).click();
+    await p.getByRole("button", { name: "Bestätigen", exact: true }).click();
+    await p.getByText("1 Einträge archiviert.").waitFor();
+    let snap = await p.evaluate(() => window.kontor.snapshot());
+    assert.ok(snap.entry.find((e) => e.subject === "Uraltes Gespräch").archivedAt);
+    assert.equal(snap.entry.filter((e) => e.archivedAt).length, 1);
+    await p.getByLabel("Aufbewahrungsfrist").selectOption("5");
+    await p.getByLabel("Uraltes Gespräch löschen").waitFor();
+    assert.equal(
+      (await p.evaluate(() => window.kontor.snapshot())).retentionDue,
+      1,
+    );
+    await p.getByRole("button", { name: "Übersicht", exact: true }).click();
+    await p.getByText("1 Eintrag hat die Aufbewahrungsfrist überschritten.").click();
+    await p.getByLabel("Uraltes Gespräch löschen").waitFor();
+    assert.ok(
+      await p.evaluate(() => {
+        const r = document.getElementById("cleanup").getBoundingClientRect();
+        return r.top < window.innerHeight && r.bottom > 0;
+      }),
+      "hint scrolls to the cleanup card",
+    );
+    await p.screenshot({ path: "test-results/cleanup.png" });
+    await p.getByRole("button", { name: "1 ausgewählte endgültig löschen" }).click();
+    await p.getByRole("button", { name: "Bestätigen", exact: true }).click();
+    await p.getByText("1 Einträge endgültig gelöscht.").waitFor();
+    snap = await p.evaluate(() => window.kontor.snapshot());
+    assert.equal(snap.entry.find((e) => e.subject === "Uraltes Gespräch"), undefined);
+    assert.equal(snap.retentionDue, 0);
     await p.getByLabel("Farbschema").selectOption("light");
     await p
       .getByRole("button", { name: "Einstellungen speichern", exact: true })
@@ -290,7 +383,7 @@ async function until(fn) {
     );
     assert.deepEqual(errors, []);
     console.log(
-      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, automatic backup, postpone, morning show, types and templates, person merge, theme, IPC isolation.",
+      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, automatic backup, postpone, morning show, types and templates, person merge, export, school-year archive, retention, theme, IPC isolation.",
     );
   } finally {
     await app?.close();
