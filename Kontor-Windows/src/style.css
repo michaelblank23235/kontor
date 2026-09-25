@@ -1762,3 +1762,11 @@ kbd {
   margin-left: auto;
   color: var(--accent);
 }
+.new-folder {
+  display: flex;
+  gap: 8px;
+  margin-top: -6px;
+}
+.new-folder input {
+  flex: 1;
+}

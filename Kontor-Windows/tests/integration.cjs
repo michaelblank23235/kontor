@@ -82,6 +82,22 @@ async function until(fn) {
     await p.getByRole("button", { name: "Ordner anlegen" }).click();
     await p.getByRole("button", { name: "Konferenzen bearbeiten" }).waitFor();
     await p.getByRole("button", { name: "Fertig", exact: true }).click();
+    // Create a folder straight from the note editor and assign it.
+    await p.getByRole("button", { name: "Bearbeiten", exact: true }).click();
+    await p.locator(".modal").getByLabel(/^Ordner/).selectOption("__new");
+    await p.getByLabel("Name des neuen Ordners").fill("Fachschaft Deutsch");
+    await p.getByLabel("Name des neuen Ordners").press("Enter");
+    await until(async () => {
+      const s = await p.evaluate(() => window.kontor.snapshot());
+      const f = s.folder.find((x) => x.name === "Fachschaft Deutsch");
+      return f && s.note[0].folderId === f.id;
+    });
+    // Enter created the folder without closing the editor.
+    await p.getByLabel("Name des neuen Ordners").waitFor({ state: "detached" });
+    await p.getByRole("textbox", { name: "Notiztext", exact: true }).waitFor();
+    await p.screenshot({ path: "test-results/new-folder.png" });
+    await p.keyboard.press("Escape");
+    await p.getByRole("button", { name: "Bearbeiten", exact: true }).waitFor();
     // Archive/reactivate and pin.
     await p.getByRole("button", { name: "Anpinnen", exact: true }).click();
     await p.getByRole("button", { name: "Loslösen", exact: true }).waitFor();

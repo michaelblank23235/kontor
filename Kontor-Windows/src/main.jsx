@@ -655,11 +655,15 @@ function App() {
                         <option value="none">Ohne Ordner</option>
                         <FolderOptions folders={data.folder} />
                       </select>
-                      <IconButton
-                        icon={FolderPlus}
-                        label="Ordner verwalten"
+                      <button
+                        type="button"
+                        aria-label="Ordner verwalten"
+                        title="Ordner anlegen, umbenennen oder löschen"
                         onClick={() => setFolderManager(true)}
-                      />
+                      >
+                        <FolderPlus size={16} />
+                        Ordner
+                      </button>
                     </div>
                     <div className="two-select">
                       <select
@@ -849,6 +853,9 @@ function App() {
           {...editor}
           data={data}
           onClose={() => setEditor(null)}
+          onCreateFolder={(name) =>
+            command("save", { kind: "folder", item: { name } })
+          }
           autosave={!editor.inboxId}
           onPersist={(value) =>
             command("save", { kind: editor.kind, item: value })
@@ -1055,6 +1062,7 @@ function EditDialog({
   onClose,
   onSave,
   onPersist,
+  onCreateFolder,
   autosave = true,
 }) {
   const [draft, setDraft] = useState(() => {
@@ -1083,7 +1091,19 @@ function EditDialog({
   });
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [saveState, setSaveState] = useState("");
+    [saveState, setSaveState] = useState(""),
+    [newFolder, setNewFolder] = useState(null);
+  async function createFolder() {
+    const name = newFolder.trim();
+    if (!name) return;
+    try {
+      const folder = await onCreateFolder(name);
+      set("folderId", folder.id);
+      setNewFolder(null);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
   const noteId = useRef(item.id),
     lastSaved = useRef(null),
     timer = useRef(null),
@@ -1311,13 +1331,52 @@ function EditDialog({
               <label>
                 Ordner
                 <select
-                  value={draft.folderId || ""}
-                  onChange={(e) => set("folderId", e.target.value || null)}
+                  value={newFolder !== null ? "__new" : draft.folderId || ""}
+                  onChange={(e) => {
+                    if (e.target.value === "__new") return setNewFolder("");
+                    setNewFolder(null);
+                    set("folderId", e.target.value || null);
+                  }}
                 >
                   <option value="">Ohne Ordner</option>
                   <FolderOptions folders={data.folder} />
+                  <option value="__new">+ Neuer Ordner …</option>
                 </select>
               </label>
+              {newFolder !== null && (
+                <div className="new-folder">
+                  <input
+                    autoFocus
+                    aria-label="Name des neuen Ordners"
+                    placeholder="Zum Beispiel: Fachschaft Deutsch"
+                    maxLength={150}
+                    value={newFolder}
+                    onChange={(e) => setNewFolder(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Enter must not submit the whole note form.
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        createFolder();
+                      }
+                      if (e.key === "Escape") {
+                        e.stopPropagation();
+                        setNewFolder(null);
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={!newFolder.trim()}
+                    onClick={createFolder}
+                  >
+                    Anlegen
+                  </button>
+                  <button type="button" onClick={() => setNewFolder(null)}>
+                    Abbrechen
+                  </button>
+                </div>
+              )}
               <div className="form-grid">
                 <TokenField
                   label="Schlagworte"
