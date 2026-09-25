@@ -23,6 +23,10 @@ const path = require("node:path");
     await p.getByLabel("PIN wiederholen").fill("0123");
     await p.getByRole("button", { name: "Arbeitsplatz einrichten" }).click();
     await p.getByRole("heading", { name: "Alles im Blick." }).waitFor();
+    // The short tour shows once for new users and can be skipped.
+    await p.getByRole("dialog", { name: "Kurzeinführung" }).waitFor();
+    await p.getByRole("button", { name: "Überspringen", exact: true }).click();
+    await p.getByRole("dialog", { name: "Kurzeinführung" }).waitFor({ state: "detached" });
     await p.screenshot({ path: "test-results/dashboard-empty.png" });
     await p.getByRole("button", { name: "Gespräche", exact: true }).click();
     await p.getByRole("button", { name: "Neues Gespräch" }).click();

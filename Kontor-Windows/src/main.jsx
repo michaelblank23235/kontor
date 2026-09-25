@@ -376,7 +376,9 @@ function App() {
     ]),
   ].sort((a, b) => a.localeCompare(b, "de"));
   const item = (data[section] || []).find((x) => x.id === selected);
-  const heading = navs.find((n) => n[0] === section)?.[1] || "Einstellungen";
+  const heading =
+    navs.find((n) => n[0] === section)?.[1] ||
+    (section === "trash" ? "Papierkorb" : "Einstellungen");
   const filtered = (data[section] || [])
     .filter((x) => !!x.archivedAt === archived && matches(x, query))
     .filter((x) => {
@@ -436,13 +438,17 @@ function App() {
       return (b.date || b.createdAt).localeCompare(a.date || a.createdAt);
     });
   const destroy = () =>
-    ask(
-      "Diesen Eintrag endgültig löschen? Diese Aktion lässt sich nicht rückgängig machen. Zugehörige Aufgaben bleiben beim Löschen eines Gesprächs ohne Ursprungsverknüpfung erhalten.",
-      async () => {
-        await command("delete", { kind: section, id: item.id });
-        setSelected(null);
-      },
-    );
+    action(async () => {
+      const trashId = await command("trash", { kind: section, id: item.id });
+      setSelected(null);
+      setNotice({ text: "In den Papierkorb verschoben.", undo: trashId });
+    });
+  const undoTrash = (trashId) =>
+    action(async () => {
+      setNotice(null);
+      const r = await command("restoreTrash", { id: trashId });
+      navigate(r.kind, r);
+    });
   const tools = {
     data,
     navigate,
@@ -494,6 +500,16 @@ function App() {
             <span>Schnellerfassung</span>
           </button>
           <div className="sidebar-rule" />
+          {data.trash?.length > 0 && (
+            <button
+              className={section === "trash" ? "active" : ""}
+              onClick={() => navigate("trash")}
+            >
+              <Trash2 size={17} />
+              <span>Papierkorb</span>
+              <span className="nav-count">{data.trash.length}</span>
+            </button>
+          )}
           <button
             className={section === "settings" ? "active" : ""}
             onClick={() => navigate("settings")}
@@ -533,6 +549,8 @@ function App() {
         </header>
         {section === "dashboard" ? (
           <Dashboard {...tools} />
+        ) : section === "trash" ? (
+          <TrashPanel {...tools} />
         ) : section === "settings" ? (
           <SettingsPanel
             status={status}
@@ -812,7 +830,7 @@ function App() {
                     />
                     <IconButton
                       icon={Trash2}
-                      label="Endgültig löschen"
+                      label="In den Papierkorb"
                       onClick={destroy}
                     />
                   </div>
@@ -837,9 +855,23 @@ function App() {
           </div>
         )}
       </main>
+      {!status.settings.tourDone && (
+        <Tour
+          hotkey={status.settings.hotkey}
+          onDone={() => action(async () => {
+            await api.tour(true);
+            await refresh();
+          })}
+        />
+      )}
       {notice && (
         <div role="status" className={"toast " + (notice.error ? "error" : "")}>
           <span>{notice.text}</span>
+          {notice.undo && (
+            <button className="text-button" onClick={() => undoTrash(notice.undo)}>
+              Rückgängig
+            </button>
+          )}
           <IconButton
             icon={X}
             label="Meldung schließen"
@@ -931,6 +963,57 @@ function BrandMark({ large = false }) {
         <path d="M21 23V18L29 10H39L26 23H21Z" fill="#d3c5ff" />
         <path d="M21 25H27L40 38H29L21 30V25Z" fill="#f5f3f7" />
       </svg>
+    </div>
+  );
+}
+// Deliberately tiny: three sentences, skippable at any time, shown once.
+function Tour({ hotkey, onDone }) {
+  const [step, setStep] = useState(0);
+  const cards = [
+    [
+      MessagesSquare,
+      "Gespräche festhalten",
+      "Protokoll schreiben, Vereinbarungen eintragen – daraus werden automatisch Aufgaben.",
+    ],
+    [
+      Inbox,
+      "Schnell notieren",
+      `Mit ${hotkey.replaceAll("Control", "Strg").replaceAll("+", " + ")} halten Sie jederzeit einen Gedanken fest und sortieren ihn später.`,
+    ],
+    [
+      ShieldCheck,
+      "Sicher auf Ihrem Rechner",
+      "Alles bleibt verschlüsselt auf diesem Rechner und wird täglich unter Dokumente\\Kontor-Sicherungen gesichert.",
+    ],
+  ];
+  const [Icon, heading, text] = cards[step];
+  const last = step === cards.length - 1;
+  return (
+    <div className="tour-overlay">
+      <section className="tour-card" role="dialog" aria-label="Kurzeinführung">
+        <Icon size={26} className="accent" />
+        <h2>{heading}</h2>
+        <p>{text}</p>
+        <div className="tour-footer">
+          <span className="tour-dots" aria-hidden="true">
+            {cards.map((_, i) => (
+              <i key={i} className={i === step ? "on" : ""} />
+            ))}
+          </span>
+          {!last && (
+            <button className="text-button" onClick={onDone}>
+              Überspringen
+            </button>
+          )}
+          <button
+            className="primary"
+            autoFocus
+            onClick={() => (last ? onDone() : setStep(step + 1))}
+          >
+            {last ? "Los geht’s" : "Weiter"}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1371,21 +1454,26 @@ function EditDialog({
                       }
                     }}
                   />
-                  <span className="muted">in</span>
-                  <select
-                    aria-label="Anlegen in"
-                    title="Anlegen in"
-                    value={newFolder.parentId || ""}
-                    onChange={(e) =>
-                      setNewFolder({
-                        ...newFolder,
-                        parentId: e.target.value || null,
-                      })
-                    }
-                  >
-                    <option value="">Oberste Ebene</option>
-                    <FolderOptions folders={data.folder} />
-                  </select>
+                  {/* Only offer a parent once there is something to choose. */}
+                  {data.folder.length > 0 && (
+                    <>
+                      <span className="muted">in</span>
+                      <select
+                        aria-label="Anlegen in"
+                        title="Anlegen in"
+                        value={newFolder.parentId || ""}
+                        onChange={(e) =>
+                          setNewFolder({
+                            ...newFolder,
+                            parentId: e.target.value || null,
+                          })
+                        }
+                      >
+                        <option value="">Oberste Ebene</option>
+                        <FolderOptions folders={data.folder} />
+                      </select>
+                    </>
+                  )}
                   <button
                     type="button"
                     className="primary"
@@ -2393,6 +2481,84 @@ function Persons({ people, data, navigate, action, command, ask }) {
     </div>
   );
 }
+const trashDays = 30;
+function TrashPanel({ data, command, action, navigate, ask }) {
+  const kindLabel = { entry: "Gespräch", note: "Notiz", todo: "Aufgabe" };
+  const daysLeft = (d) =>
+    Math.max(
+      0,
+      trashDays - Math.floor((Date.now() - new Date(d)) / 86400000),
+    );
+  return (
+    <div className="page trash-page">
+      <div className="page-intro">
+        <span className="eyebrow">PAPIERKORB</span>
+        <h1>Gelöscht, aber nicht verloren.</h1>
+        <p>
+          Gelöschtes bleibt {trashDays} Tage hier und lässt sich mit allen
+          Anhängen und Verknüpfungen wiederherstellen. Danach wird es endgültig
+          entfernt.
+        </p>
+      </div>
+      {data.trash.length === 0 ? (
+        <Empty icon={Trash2} title="Der Papierkorb ist leer" />
+      ) : (
+        <>
+          <div className="trash-list">
+            {data.trash.map((t) => (
+              <div className="trash-row" key={t.id}>
+                <div>
+                  <strong>{t.title}</strong>
+                  <small>
+                    {kindLabel[t.kind]} · gelöscht am {fmt(t.deletedAt)} · noch{" "}
+                    {daysLeft(t.deletedAt)} Tage
+                  </small>
+                </div>
+                <button
+                  onClick={() =>
+                    action(async () => {
+                      const r = await command("restoreTrash", { id: t.id });
+                      navigate(r.kind, r);
+                    })
+                  }
+                >
+                  <ArrowLeft size={15} />
+                  Wiederherstellen
+                </button>
+                <IconButton
+                  icon={X}
+                  label={`${t.title} endgültig löschen`}
+                  onClick={() =>
+                    ask(
+                      `„${t.title}“ endgültig löschen? Das lässt sich nicht rückgängig machen.`,
+                      () => action(() => command("purgeTrash", { id: t.id })),
+                    )
+                  }
+                />
+              </div>
+            ))}
+          </div>
+          <button
+            className="destructive"
+            onClick={() =>
+              ask(
+                `Den Papierkorb leeren? ${data.trash.length} Einträge werden endgültig gelöscht.`,
+                () =>
+                  action(async () => {
+                    await command("purgeTrash", {});
+                    navigate("dashboard");
+                  }),
+              )
+            }
+          >
+            <Trash2 size={16} />
+            Papierkorb leeren
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
 function InboxPanel({ data, command, action, setEditor, ask }) {
   const [text, setText] = useState(""),
     [busy, setBusy] = useState(false);
@@ -3386,6 +3552,17 @@ function SettingsPanel({ status, action, refresh, data, command, ask }) {
         <h2>
           <Keyboard size={19} /> Schnell zum Ziel
         </h2>
+        <button
+          className="text-button"
+          onClick={() =>
+            action(async () => {
+              await api.tour(false);
+              await refresh();
+            })
+          }
+        >
+          Kurzeinführung erneut ansehen
+        </button>
         <div className="shortcut-list">
           {[
             ["Strg + N", "Neuer Eintrag im aktuellen Bereich"],

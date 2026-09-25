@@ -30,6 +30,8 @@ Beim ersten Start eine PIN aus genau vier Ziffern vergeben (führende Nullen sin
 - Export für Gespräche, Notizen, Aufgaben und Personenakten als PDF, Word (.docx) oder Markdown sowie direktes Drucken. „Alles als Dateien exportieren“ legt den gesamten Bestand samt Anhängen als lesbare Markdown-Dateien in einem gewählten Ordner ab.
 - Aufräumen: Schuljahresabschluss archiviert Gespräche, Notizen und erledigte Aufgaben vor einem Stichtag (Standard: 1. August). Eine optionale Aufbewahrungsfrist listet Einträge, die älter sind, zum gezielten endgültigen Löschen; offene Aufgaben sind ausgenommen, gelöscht wird nur nach Bestätigung. Frist und Gesprächstypen liegen in der verschlüsselten Datenbank.
 - Inbox mit Umwandlung in Gespräche, Aufgaben oder Notizen; separates Schnellerfassungsfenster, globales Tastenkürzel und Symbol im Infobereich.
+- Papierkorb: Gelöschte Gespräche, Notizen und Aufgaben bleiben 30 Tage samt Anhängen und Verknüpfungen wiederherstellbar; direkt nach dem Löschen auch per „Rückgängig“. Ältere Einträge werden beim Entsperren endgültig entfernt. Löschen über die Aufbewahrungsfrist umgeht den Papierkorb bewusst.
+- Kurzeinführung mit drei Karten beim ersten Start, jederzeit überspringbar und in den Einstellungen erneut aufrufbar.
 - Dunkles/helles/systemabhängiges Erscheinungsbild, Sperren, verschlüsselte Sicherung und Wiederherstellung.
 - Automatische Sicherung (abschaltbar): einmal täglich nach dem Entsperren sowie beim Sperren und Beenden nach `Dokumente\Kontor-Sicherungen`. Die Dateien heißen `Kontor-Auto-JJJJ-MM-TT.kontorbackup`; die neuesten 14 bleiben erhalten, andere Dateien im Ordner werden nicht angefasst.
 

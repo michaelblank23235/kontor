@@ -115,6 +115,78 @@ test("Löschfristen: aus, dann Vorschläge ohne offene Aufgaben, Löschen in ein
   r.setRetention(null);
   assert.equal(r.retentionYears(), null);
 });
+test("Papierkorb: Notiz samt Anhang, Ordner und Verknüpfung wiederherstellen", async () => {
+  const r = await setup();
+  const f = r.save("folder", { name: "Konferenzen" });
+  const n = r.save("note", { title: "Protokoll", folderId: f.id });
+  const t = r.save("todo", { title: "Nachfassen" });
+  r.link("note", n.id, "todo", t.id, true);
+  r.attachment(n.id, "a.pdf", "application/pdf", Buffer.from("%PDF-x"));
+  const trashId = r.trash("note", n.id);
+  assert.equal(r.get("note", n.id), null);
+  assert.equal(r.snapshot().links.length, 0);
+  assert.equal(r.snapshot().attachments.length, 0);
+  assert.deepEqual(
+    r.trashList().map((x) => [x.kind, x.title]),
+    [["note", "Protokoll"]],
+  );
+  assert.deepEqual(r.restoreTrash(trashId), {
+    kind: "note",
+    id: n.id,
+    archivedAt: null,
+  });
+  assert.equal(r.get("note", n.id).folderId, f.id);
+  assert.equal(r.snapshot().links.length, 1);
+  const a = r.query("SELECT data FROM attachment WHERE noteId=?", [n.id])[0];
+  assert.equal(Buffer.from(a.data).toString(), "%PDF-x");
+  assert.deepEqual(r.trashList(), []);
+  assert.throws(() => r.restoreTrash(trashId), /nicht mehr im Papierkorb/);
+  // A folder deleted in the meantime does not block restoring.
+  const again = r.trash("note", n.id);
+  r.remove("folder", f.id);
+  r.restoreTrash(again);
+  assert.equal(r.get("note", n.id).folderId, null);
+  assert.throws(() => r.trash("folder", f.id), /Ungültiger/);
+});
+test("Papierkorb: Gespräch und Vereinbarungsaufgabe finden wieder zusammen", async () => {
+  const r = await setup();
+  const e = r.save("entry", {
+    subject: "Elterngespräch",
+    agreements: [{ text: "Rückmeldung" }],
+  });
+  const taskId = e.agreements[0].taskId;
+  // Task out and back in: the agreement points to it again.
+  const tt = r.trash("todo", taskId);
+  assert.equal(r.get("entry", e.id).agreements[0].taskId, null);
+  r.restoreTrash(tt);
+  assert.equal(r.get("entry", e.id).agreements[0].taskId, taskId);
+  // Conversation out and back in: the task belongs to it again.
+  const te = r.trash("entry", e.id);
+  assert.equal(r.get("todo", taskId).entryId, null);
+  r.restoreTrash(te);
+  assert.equal(r.get("todo", taskId).entryId, e.id);
+  // Task whose conversation is gone comes back on its own.
+  const tt2 = r.trash("todo", taskId);
+  r.remove("entry", e.id);
+  r.restoreTrash(tt2);
+  assert.equal(r.get("todo", taskId).entryId, null);
+});
+test("Papierkorb leert sich nach Frist, einzeln oder ganz", async () => {
+  const r = await setup();
+  const a = r.trash("todo", r.save("todo", { title: "Alt" }).id);
+  r.trash("todo", r.save("todo", { title: "Neu" }).id);
+  r.db.run("UPDATE trash SET deletedAt=? WHERE id=?", [
+    "2026-01-01T00:00:00.000Z",
+    a,
+  ]);
+  r.purgeTrash({ before: "2026-06-01T00:00:00.000Z" });
+  assert.deepEqual(r.trashList().map((x) => x.title), ["Neu"]);
+  r.trash("todo", r.save("todo", { title: "Drei" }).id);
+  r.purgeTrash({ id: r.trashList()[0].id });
+  assert.equal(r.trashList().length, 1);
+  r.purgeTrash();
+  assert.deepEqual(r.trashList(), []);
+});
 test("Verschieben: ohne Datum eine Woche, mit Datum genau dorthin", async () => {
   const r = await setup();
   const t = r.save("todo", {

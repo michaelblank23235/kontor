@@ -29,6 +29,13 @@ async function until(fn) {
     await p.getByLabel("PIN wiederholen").fill("0123");
     await p.getByRole("button", { name: "Arbeitsplatz einrichten" }).click();
     await p.getByRole("heading", { name: "Alles im Blick." }).waitFor();
+    // The short tour shows once for new users and can be skipped.
+    await p.getByRole("dialog", { name: "Kurzeinführung" }).waitFor();
+    await p.getByRole("button", { name: "Weiter", exact: true }).click();
+    await p.getByRole("heading", { name: "Schnell notieren" }).waitFor();
+    await p.screenshot({ path: "test-results/tour.png" });
+    await p.getByRole("button", { name: "Überspringen", exact: true }).click();
+    await p.getByRole("dialog", { name: "Kurzeinführung" }).waitFor({ state: "detached" });
     // Autosave on editing and flush before locking (without a Save button).
     await p.getByRole("button", { name: "Notizen", exact: true }).click();
     await p.getByRole("button", { name: "Neue Notiz", exact: true }).click();
@@ -85,6 +92,8 @@ async function until(fn) {
     // Create a folder straight from the note editor and assign it.
     await p.getByRole("button", { name: "Bearbeiten", exact: true }).click();
     await p.locator(".modal").getByLabel(/^Ordner/).selectOption("__new");
+    // "Konferenzen" exists already, so the parent picker is offered.
+    await p.getByLabel("Anlegen in", { exact: true }).waitFor();
     await p.getByLabel("Name des neuen Ordners").fill("Fachschaft Deutsch");
     await p.getByLabel("Name des neuen Ordners").press("Enter");
     await until(async () => {
@@ -340,6 +349,28 @@ async function until(fn) {
     await app.evaluate(() => globalThis.restorePrint());
     assert.match(printed, /Konferenz 7b/);
     assert.match(printed, /Klassenkonferenz/);
+    // Trash: delete, undo from the toast, delete again, restore from the trash.
+    await p.getByRole("button", { name: "In den Papierkorb", exact: true }).click();
+    await p.getByText("In den Papierkorb verschoben.").waitFor();
+    await p.getByRole("button", { name: "Rückgängig", exact: true }).click();
+    await p.getByRole("heading", { name: "Konferenz 7b", exact: true }).waitFor();
+    await p.getByRole("button", { name: "In den Papierkorb", exact: true }).click();
+    await p.getByRole("button", { name: /^Papierkorb/ }).click();
+    await p.getByText("Gelöscht, aber nicht verloren.").waitFor();
+    await p.screenshot({ path: "test-results/trash.png" });
+    assert.deepEqual(
+      await p.evaluate(() =>
+        [...document.querySelectorAll(".sidebar button.active")].map((b) =>
+          b.innerText.split("\n")[0],
+        ),
+      ),
+      ["Papierkorb"],
+    );
+    await p.getByRole("button", { name: "Wiederherstellen", exact: true }).click();
+    await p.getByRole("heading", { name: "Konferenz 7b", exact: true }).waitFor();
+    assert.equal((await p.evaluate(() => window.kontor.snapshot())).trash.length, 0);
+    // The sidebar entry disappears again once the trash is empty.
+    assert.equal(await p.getByRole("button", { name: /^Papierkorb/ }).count(), 0);
     // Full export into a chosen folder.
     const exportParent = path.join(dir, "export-ziel");
     fs.mkdirSync(exportParent);
@@ -413,7 +444,7 @@ async function until(fn) {
     );
     assert.deepEqual(errors, []);
     console.log(
-      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, automatic backup, postpone, morning show, types and templates, person merge, export, school-year archive, retention, theme, IPC isolation.",
+      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, automatic backup, postpone, morning show, types and templates, person merge, export, print, trash, tour, school-year archive, retention, theme, IPC isolation.",
     );
   } finally {
     await app?.close();

@@ -1774,3 +1774,70 @@ kbd {
 .new-folder select {
   width: 220px;
 }
+.trash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 22px;
+  max-width: 820px;
+}
+.trash-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.trash-row > div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.toast .text-button {
+  margin-left: 6px;
+}
+.tour-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: #0008;
+}
+.tour-card {
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.tour-footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 10px;
+}
+.tour-dots {
+  display: flex;
+  gap: 6px;
+  margin-right: auto;
+}
+.tour-dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border);
+  outline: 1px solid var(--muted);
+}
+.tour-dots i.on {
+  background: var(--accent);
+  outline-color: var(--accent);
+}

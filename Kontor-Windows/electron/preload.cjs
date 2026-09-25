@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld("kontor", {
   print: (k, id) => invoke("print", k, id),
   exportAll: () => invoke("exportAll"),
   cleanupPreview: (before) => invoke("cleanupPreview", before),
+  tour: (done) => invoke("tour", done),
   external: (u) => invoke("external", u),
   capture: () => invoke("capture"),
   hideCapture: () => invoke("hideCapture"),

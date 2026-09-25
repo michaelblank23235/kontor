@@ -79,7 +79,8 @@ class Repository {
       CREATE TABLE IF NOT EXISTS record (kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(kind,id));
       CREATE TABLE IF NOT EXISTS link (aKind TEXT NOT NULL,aId TEXT NOT NULL,bKind TEXT NOT NULL,bId TEXT NOT NULL,PRIMARY KEY(aKind,aId,bKind,bId));
       CREATE TABLE IF NOT EXISTS attachment (id TEXT PRIMARY KEY,noteId TEXT NOT NULL,filename TEXT NOT NULL,mime TEXT NOT NULL,data BLOB NOT NULL);
-      CREATE INDEX IF NOT EXISTS attachments_note ON attachment(noteId);`);
+      CREATE INDEX IF NOT EXISTS attachments_note ON attachment(noteId);
+      CREATE TABLE IF NOT EXISTS trash (id TEXT PRIMARY KEY, kind TEXT NOT NULL, data TEXT NOT NULL, deletedAt TEXT NOT NULL);`);
     const version = this.query("SELECT value FROM meta WHERE key=?", [
       "version",
     ])[0]?.value;
@@ -193,6 +194,101 @@ class Repository {
     if (!changed) throw Error("Diese Person wurde nicht gefunden.");
     return changed;
   }
+  // Moves an item with its links and attachments into the trash; the regular
+  // removal (detaching tasks, entries, links) runs as before.
+  trash(kind, key) {
+    if (!itemKinds.includes(kind)) throw Error("Ungültiger Eintrag.");
+    const item = this.require(kind, key);
+    const links = this.query(
+      "SELECT * FROM link WHERE (aKind=? AND aId=?) OR (bKind=? AND bId=?)",
+      [kind, key, kind, key],
+    );
+    const attachments = this.query(
+      "SELECT id,filename,mime,data FROM attachment WHERE noteId=?",
+      [key],
+    ).map((a) => ({ ...a, data: Buffer.from(a.data).toString("base64") }));
+    this.remove(kind, key);
+    const trashId = id();
+    this.db.run("INSERT INTO trash VALUES (?,?,?,?)", [
+      trashId,
+      kind,
+      JSON.stringify({ item, links, attachments }),
+      now(),
+    ]);
+    return trashId;
+  }
+  restoreTrash(trashId) {
+    const row = this.query("SELECT * FROM trash WHERE id=?", [
+      text(trashId || "", 100),
+    ])[0];
+    if (!row) throw Error("Der Eintrag ist nicht mehr im Papierkorb.");
+    const { item, links, attachments } = JSON.parse(row.data);
+    const kind = row.kind;
+    if (this.get(kind, item.id)) throw Error("Der Eintrag existiert bereits.");
+    let restored = { ...item };
+    if (kind === "note" && item.folderId && !this.get("folder", item.folderId))
+      restored.folderId = null;
+    if (kind === "todo" && item.entryId) {
+      // Re-attach to its conversation's agreement if both still exist.
+      const e = this.get("entry", item.entryId);
+      const a = e?.agreements.find((x) => x.id === item.agreementId);
+      if (a && !a.taskId)
+        this.put("entry", {
+          ...e,
+          agreements: e.agreements.map((x) =>
+            x.id === a.id ? { ...x, taskId: item.id } : x,
+          ),
+        });
+      else restored = { ...restored, entryId: null, agreementId: null };
+    }
+    if (kind === "entry")
+      for (const a of item.agreements) {
+        const t = a.taskId && this.get("todo", a.taskId);
+        if (t && !t.entryId)
+          this.put("todo", { ...t, entryId: item.id, agreementId: a.id });
+      }
+    this.put(kind, restored);
+    for (const l of links)
+      if (this.get(l.aKind, l.aId) && this.get(l.bKind, l.bId))
+        this.db.run("INSERT OR IGNORE INTO link VALUES (?,?,?,?)", [
+          l.aKind,
+          l.aId,
+          l.bKind,
+          l.bId,
+        ]);
+    for (const a of attachments)
+      this.db.run("INSERT OR IGNORE INTO attachment VALUES (?,?,?,?,?)", [
+        a.id,
+        item.id,
+        a.filename,
+        a.mime,
+        Buffer.from(a.data, "base64"),
+      ]);
+    this.db.run("DELETE FROM trash WHERE id=?", [row.id]);
+    return { kind, id: item.id, archivedAt: item.archivedAt };
+  }
+  // Without an id, empties the whole trash; with "before", only older items.
+  purgeTrash({ id: trashId, before } = {}) {
+    if (trashId) this.db.run("DELETE FROM trash WHERE id=?", [trashId]);
+    else if (before)
+      this.db.run("DELETE FROM trash WHERE deletedAt < ?", [
+        date(before, false),
+      ]);
+    else this.db.run("DELETE FROM trash");
+  }
+  trashList() {
+    return this.query(
+      "SELECT id,kind,data,deletedAt FROM trash ORDER BY deletedAt DESC",
+    ).map((r) => {
+      const { item } = JSON.parse(r.data);
+      return {
+        id: r.id,
+        kind: r.kind,
+        title: item.subject || item.title || "Ohne Titel",
+        deletedAt: r.deletedAt,
+      };
+    });
+  }
   // What archiving at a school-year cut-off would touch: conversations held,
   // notes last changed and tasks completed before that day. Pinned notes and
   // open tasks stay active.
@@ -278,6 +374,7 @@ class Repository {
       types: this.types(),
       retentionYears: this.retentionYears(),
       retentionDue: this.retentionCandidates().length,
+      trash: this.trashList(),
       links: this.query("SELECT * FROM link"),
       attachments: this.query(
         "SELECT id,noteId,filename,mime,length(data) AS byteCount FROM attachment",
@@ -582,6 +679,12 @@ class Repository {
         return this.setRetention(args.years);
       case "deleteMany":
         return this.deleteMany(args.items);
+      case "trash":
+        return this.trash(args.kind, args.id);
+      case "restoreTrash":
+        return this.restoreTrash(args.id);
+      case "purgeTrash":
+        return this.purgeTrash(args);
       case "removeAttachment":
         this.db.run("DELETE FROM attachment WHERE id=?", [args.id]);
         return;

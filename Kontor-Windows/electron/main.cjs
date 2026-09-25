@@ -375,6 +375,14 @@ app
     handle("unlock", async (_e, password) => {
       await vault.unlock(password);
       autoBackup();
+      // Trash keeps items for 30 days; older ones go for good.
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      try {
+        vault.command("purgeTrash", { before: cutoff.toISOString() });
+      } catch (error) {
+        log.record("trash.purge.failed", { message: error.message });
+      }
       markShown();
       notify();
       return vault.repo.snapshot();
@@ -407,6 +415,7 @@ app
         morningShow: values.morningShow,
         lastBackup: settings.lastBackup,
         shownOn: settings.shownOn,
+        tourDone: settings.tourDone,
       };
       saveSettings();
       applyLoginItem();
@@ -495,6 +504,11 @@ app
         archive: { entry: c.entry.length, note: c.note.length, todo: c.todo.length },
         retention: r.retentionCandidates(),
       };
+    });
+    handle("tour", (_e, done) => {
+      settings.tourDone = !!done;
+      saveSettings();
+      notify();
     });
     handle("openStartupSettings", () =>
       shell.openExternal("ms-settings:startupapps"),
