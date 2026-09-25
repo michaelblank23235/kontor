@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'Kontor-Windows/**'
+      - 'Kontor-Store-Build.zip'
       - '.github/workflows/store-build.yml'
 permissions:
   contents: read
@@ -11,25 +11,28 @@ jobs:
   build:
     runs-on: windows-2022
     timeout-minutes: 25
-    defaults:
-      run:
-        working-directory: Kontor-Windows
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+      - name: Prepare source
+        shell: pwsh
+        run: Expand-Archive -LiteralPath Kontor-Store-Build.zip -DestinationPath build-source
       - name: Install dependencies
+        working-directory: build-source/Kontor-Windows
         run: npm ci
       - name: Test application
+        working-directory: build-source/Kontor-Windows
         run: npm test
       - name: Build Store bundle
+        working-directory: build-source/Kontor-Windows
         shell: powershell
         run: ./scripts/build-store.ps1
       - name: Upload Store bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: Kontor-Store-x64
-          path: Kontor-Windows/release/store/*
+          path: build-source/Kontor-Windows/release/store/*
           if-no-files-found: error
           retention-days: 14

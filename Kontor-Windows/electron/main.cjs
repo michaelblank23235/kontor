@@ -1,0 +1,722 @@
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  Menu,
+  Tray,
+  globalShortcut,
+  nativeImage,
+  powerMonitor,
+  shell,
+  session,
+} = require("electron");
+const fs = require("node:fs");
+const path = require("node:path");
+const { pathToFileURL } = require("node:url");
+const { Vault, atomicWrite } = require("./vault.cjs");
+const { optionalStartup } = require("./startup.cjs");
+const { markdownFor, docxFor, exportAll } = require("./exporter.cjs");
+const { log, fatal } = global.kontorStartup;
+log.record("main.loaded");
+// Packaged Store apps use the identity assigned by Windows.
+if (process.platform === "win32" && !process.windowsStore)
+  app.setAppUserModelId("de.kontor.windows");
+const base = path.join(__dirname, "..");
+const indexFile = path.join(base, "dist/index.html");
+let win,
+  quick,
+  tray,
+  vault,
+  quitting = false,
+  settings,
+  settingsFile,
+  quittingPending = false;
+let flushCounter = 0;
+async function flushEditors() {
+  const windows = BrowserWindow.getAllWindows().filter(
+    (w) =>
+      !w.isDestroyed() &&
+      w.webContents.getURL().split("#")[0] === pathToFileURL(indexFile).href,
+  );
+  await Promise.all(
+    windows.map(
+      (w) =>
+        new Promise((resolve, reject) => {
+          const id = ++flushCounter;
+          const timeout = setTimeout(() => done(false), 5000);
+          const listener = (e, key, ok) => {
+            if (e.sender === w.webContents && key === id) done(ok);
+          };
+          function done(ok) {
+            clearTimeout(timeout);
+            ipcMain.removeListener("kontor:flushed", listener);
+            ok
+              ? resolve()
+              : reject(
+                  Error(
+                    "Eine Notiz konnte nicht gespeichert werden. Bitte den Editor prüfen.",
+                  ),
+                );
+          }
+          ipcMain.on("kontor:flushed", listener);
+          w.webContents.send("kontor:flush", id);
+        }),
+    ),
+  );
+}
+const backupDir = () =>
+  path.join(app.getPath("documents"), "Kontor-Sicherungen");
+// Automatic backups must never block saving, locking or quitting.
+function autoBackup(force = false) {
+  if (settings?.autoBackup === false || !vault?.repo) return;
+  try {
+    if (vault.autoBackup(backupDir(), { force })) {
+      settings.lastBackup = new Date().toISOString();
+      saveSettings();
+    }
+    delete settings.backupError;
+  } catch (error) {
+    settings.backupError = error.message;
+    log.record("backup.auto.failed", { message: error.message });
+  }
+}
+function saveSettings() {
+  const { hotkeyError, backupError, ...stored } = settings;
+  atomicWrite(settingsFile, Buffer.from(JSON.stringify(stored)));
+}
+// Tests can move to "another day" without waiting; ignored outside test mode.
+const today = () =>
+  (testMode && process.env.KONTOR_TEST_DAY) ||
+  new Date().toLocaleDateString("sv-SE");
+function markShown() {
+  if (settings.shownOn === today()) return;
+  settings.shownOn = today();
+  saveSettings();
+}
+// Opt-in: the first wake of a new day brings the overview forward. Needs no
+// decrypted data, so it also works while Kontor is locked.
+function morning() {
+  if (!settings?.morningShow || settings.shownOn === today()) return;
+  markShown();
+  showMain();
+  win?.webContents.send("kontor:navigate", "dashboard");
+}
+// Store packages declare a disabled StartupTask; users switch it on in Windows.
+function applyLoginItem() {
+  if (process.windowsStore || testMode) return;
+  app.setLoginItemSettings({ openAtLogin: !!settings.morningShow });
+}
+async function lockVault() {
+  await flushEditors();
+  autoBackup(true);
+  vault.lock();
+  quick?.hide();
+  notify();
+}
+const testMode = process.env.KONTOR_TEST === "1" && !app.isPackaged;
+function createWindow(capture = false) {
+  const w = new BrowserWindow({
+    width: capture ? 480 : 1280,
+    height: capture ? 340 : 820,
+    minWidth: capture ? 420 : 980,
+    minHeight: capture ? 300 : 620,
+    show: true,
+    title: capture ? "Kontor · Schnellerfassung" : "Kontor",
+    backgroundColor: "#16141a",
+    icon: path.join(base, "resources/icon.png"),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  log.record("window.created", { capture });
+  w.webContents.on(
+    "did-fail-load",
+    (_event, code, description, _url, isMainFrame) => {
+      if (isMainFrame && code !== -3)
+        fatal("window.load.failed", Error(`${description} (${code})`));
+    },
+  );
+  w.webContents.on("preload-error", (_event, _file, error) =>
+    fatal("window.preload.failed", error),
+  );
+  w.webContents.on("render-process-gone", (_event, details) => {
+    if (!quitting)
+      fatal(
+        "window.renderer.failed",
+        Error(`${details.reason} (${details.exitCode})`),
+      );
+  });
+  w.loadFile(indexFile, { hash: capture ? "capture" : "" })
+    .then(() => {
+      log.record("window.loaded", { capture });
+    })
+    .catch((error) => fatal("window.load.failed", error));
+  w.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  w.webContents.on("will-navigate", (e) => e.preventDefault());
+  if (!capture) {
+    let closing = false;
+    w.on("close", (e) => {
+      if (!quitting && !closing) {
+        e.preventDefault();
+        flushEditors()
+          .then(() => {
+            closing = true;
+            w.close();
+          })
+          .catch((error) =>
+            dialog.showErrorBox("Speichern fehlgeschlagen", error.message),
+          );
+      }
+    });
+  }
+  if (capture)
+    w.on("close", (e) => {
+      if (!quitting) {
+        e.preventDefault();
+        w.hide();
+      }
+    });
+  return w;
+}
+function showMain() {
+  if (!app.isReady()) {
+    app.whenReady().then(showMain);
+    return;
+  }
+  if (!win || win.isDestroyed()) win = createWindow();
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+function capture() {
+  if (!vault.repo) {
+    showMain();
+    return;
+  }
+  if (!quick || quick.isDestroyed()) quick = createWindow(true);
+  quick.show();
+  quick.focus();
+}
+function notify() {
+  for (const w of BrowserWindow.getAllWindows())
+    w.webContents.send("kontor:changed");
+}
+function registerHotkey(value) {
+  const previous = settings.hotkey;
+  globalShortcut.unregisterAll();
+  if (!globalShortcut.register(value, capture)) {
+    if (previous) globalShortcut.register(previous, capture);
+    throw Error("Dieses Tastenkürzel ist bereits belegt oder ungültig.");
+  }
+}
+function allowed(event) {
+  const u = event.senderFrame?.url?.split("#")[0];
+  if (u !== pathToFileURL(indexFile).href)
+    throw Error("Nicht erlaubter Zugriff.");
+}
+function unlocked() {
+  if (!vault.repo) throw Error("Kontor ist gesperrt.");
+  return vault.repo;
+}
+function handle(name, fn) {
+  ipcMain.handle("kontor:" + name, async (e, ...args) => {
+    try {
+      allowed(e);
+      return { ok: true, value: await fn(e, ...args) };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error.message || "Die Aktion konnte nicht abgeschlossen werden.",
+      };
+    }
+  });
+}
+function parent(e) {
+  return BrowserWindow.fromWebContents(e.sender) || win;
+}
+function safeName(s) {
+  return (s || "Kontor").replace(/[<>:"/\\|?*\x00-\x1f]/g, "-").slice(0, 100);
+}
+const esc = (s) =>
+  String(s ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
+  );
+function exportName(kind, key) {
+  if (kind === "person") return safeName("Personenakte " + key);
+  const x = unlocked().require(kind, key);
+  return safeName(x.subject || x.title || "Kontor");
+}
+// Renders the export HTML in a hidden, sandboxed window without network access.
+async function withReport(kind, key, work) {
+  const content = printContent(kind, key);
+  const report = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      sandbox: true,
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+  try {
+    await report.loadURL(
+      "data:text/html;charset=utf-8," +
+        encodeURIComponent(
+          `<!doctype html><html lang="de"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>body{font:12px system-ui;color:#24202c;line-height:1.6}h1{font-size:23px;margin-top:24px}h2{font-size:17px}.text{white-space:pre-wrap;overflow-wrap:anywhere}p{break-inside:avoid}</style><header>KONTOR · Dokumentation</header>${content}</html>`,
+        ),
+    );
+    return await work(report);
+  } finally {
+    report.destroy();
+  }
+}
+function printContent(kind, key) {
+  const r = unlocked();
+  const section = (title, body) => `<h1>${esc(title)}</h1>${body}`;
+  const p = (s) => `<div class="text">${esc(s)}</div>`;
+  if (kind === "person") {
+    const entries = r
+      .all("entry")
+      .filter((x) => x.participants.includes(key))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    const notes = r.all("note").filter((x) => x.persons.includes(key));
+    return section(
+      "Personenakte: " + key,
+      entries
+        .map((x) =>
+          section(
+            x.subject,
+            `<p>${esc(new Date(x.date).toLocaleString("de-DE"))}</p>` +
+              p(x.body),
+          ),
+        )
+        .join("") + notes.map((x) => section(x.title, p(x.body))).join(""),
+    );
+  }
+  if (!["entry", "note", "todo"].includes(kind))
+    throw Error("Ungültiger Export.");
+  const x = r.require(kind, key);
+  return section(
+    x.subject || x.title || "Ohne Titel",
+    (x.date
+      ? `<p>${esc(new Date(x.date).toLocaleString("de-DE"))} · ${esc(x.type)} · ${esc(x.confidentiality)}</p>`
+      : "") +
+      ((x.participants || x.persons)?.length
+        ? `<p>${esc((x.participants || x.persons).join(", "))}</p>`
+        : "") +
+      (x.updatedAt
+        ? `<p>Stand: ${esc(new Date(x.updatedAt).toLocaleString("de-DE"))}</p>`
+        : "") +
+      (x.tags?.length
+        ? `<p>Schlagworte: ${esc(x.tags.map((t) => "#" + t).join(" "))}</p>`
+        : "") +
+      (x.status
+        ? `<p>Status: ${esc(x.status)} · Frist: ${x.dueDate ? esc(new Date(x.dueDate).toLocaleDateString("de-DE")) : "Ohne Frist"} · Wiederholung: ${esc(x.recurrence)}</p>`
+        : "") +
+      p(x.body || x.note) +
+      ((x.agreements || []).length
+        ? "<h2>Vereinbarungen</h2>" +
+          x.agreements
+            .map(
+              (a) =>
+                `<p><strong>${esc(a.text)}</strong><br>${esc(a.responsible)} ${a.dueDate ? "· " + esc(new Date(a.dueDate).toLocaleDateString("de-DE")) : ""}</p>`,
+            )
+            .join("")
+        : ""),
+  );
+}
+app
+  .whenReady()
+  .then(() => {
+    log.record("app.ready");
+    vault = new Vault(path.join(app.getPath("userData"), "kontor.kontorvault"));
+    settingsFile = path.join(app.getPath("userData"), "settings.json");
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+    } catch {
+      settings = {};
+    }
+    settings = {
+      theme: "dark",
+      hotkey: "Control+Alt+K",
+      autoBackup: true,
+      morningShow: false,
+      ...settings,
+    };
+    session.defaultSession.setPermissionRequestHandler((_wc, _p, cb) =>
+      cb(false),
+    );
+    session.defaultSession.setPermissionCheckHandler(() => false);
+    session.defaultSession.webRequest.onBeforeRequest(
+      { urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] },
+      (_d, cb) => cb({ cancel: true }),
+    );
+    let rendererConnected = false;
+    handle("status", () => {
+      if (!rendererConnected) {
+        log.record("renderer.connected");
+        rendererConnected = true;
+      }
+      return {
+        exists: vault.exists,
+        unlocked: !!vault.repo,
+        settings: { ...settings, backupDir: backupDir() },
+        windowsStore: !!process.windowsStore,
+      };
+    });
+    handle("unlock", async (_e, password) => {
+      await vault.unlock(password);
+      autoBackup();
+      // Trash keeps items for 30 days; older ones go for good.
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      try {
+        vault.command("purgeTrash", { before: cutoff.toISOString() });
+      } catch (error) {
+        log.record("trash.purge.failed", { message: error.message });
+      }
+      markShown();
+      notify();
+      return vault.repo.snapshot();
+    });
+    handle("changePin", (_e, current, pin) => vault.changePin(current, pin));
+    handle("lock", () => lockVault());
+    handle("snapshot", () => unlocked().snapshot());
+    handle("command", (_e, c, a) => {
+      unlocked();
+      const result = vault.command(c, a);
+      // Covers sessions that stay unlocked past midnight.
+      autoBackup();
+      notify();
+      return result;
+    });
+    handle("settings", (_e, values) => {
+      if (!["dark", "light", "system"].includes(values.theme))
+        throw Error("Ungültiges Erscheinungsbild.");
+      if (typeof values.hotkey !== "string" || values.hotkey.length > 100)
+        throw Error("Ungültiges Tastenkürzel.");
+      if (typeof values.autoBackup !== "boolean")
+        throw Error("Ungültige Sicherungseinstellung.");
+      if (typeof values.morningShow !== "boolean")
+        throw Error("Ungültige Einstellung für den Morgenstart.");
+      if (values.hotkey !== settings.hotkey) registerHotkey(values.hotkey);
+      settings = {
+        theme: values.theme,
+        hotkey: values.hotkey,
+        autoBackup: values.autoBackup,
+        morningShow: values.morningShow,
+        lastBackup: settings.lastBackup,
+        shownOn: settings.shownOn,
+        tourDone: settings.tourDone,
+      };
+      saveSettings();
+      applyLoginItem();
+      notify();
+      return settings;
+    });
+    handle("addAttachments", async (e, noteId) => {
+      unlocked().require("note", noteId);
+      const result = await dialog.showOpenDialog(parent(e), {
+        title: "Bilder oder PDF anhängen",
+        properties: ["openFile", "multiSelections"],
+        filters: [
+          {
+            name: "Bilder und PDF",
+            extensions: ["png", "jpg", "jpeg", "webp", "gif", "pdf"],
+          },
+        ],
+      });
+      if (result.canceled) return;
+      const files = result.filePaths.map((file) => {
+        if (fs.statSync(file).size > 30 * 1024 * 1024)
+          throw Error("Anhänge dürfen höchstens 30 MB groß sein.");
+        const ext = path.extname(file).toLowerCase();
+        const mime = {
+          ".png": "image/png",
+          ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg",
+          ".webp": "image/webp",
+          ".gif": "image/gif",
+          ".pdf": "application/pdf",
+        }[ext];
+        return {
+          filename: path.basename(file),
+          mime,
+          bytes: fs.readFileSync(file),
+        };
+      });
+      const r = unlocked();
+      r.transaction(
+        () =>
+          files.forEach((f) =>
+            r.attachment(noteId, f.filename, f.mime, f.bytes),
+          ),
+        () => vault.persist(),
+      );
+      notify();
+    });
+    handle("attachment", (_e, key) => {
+      const a = unlocked().query("SELECT * FROM attachment WHERE id=?", [
+        key,
+      ])[0];
+      if (!a) throw Error("Anhang nicht gefunden.");
+      return {
+        filename: a.filename,
+        mime: a.mime,
+        data: Buffer.from(a.data).toString("base64"),
+      };
+    });
+    handle("saveAttachment", async (e, key) => {
+      const a = unlocked().query("SELECT * FROM attachment WHERE id=?", [
+        key,
+      ])[0];
+      if (!a) throw Error("Anhang nicht gefunden.");
+      const d = await dialog.showSaveDialog(parent(e), {
+        defaultPath: safeName(a.filename),
+      });
+      if (!d.canceled) atomicWrite(d.filePath, Buffer.from(a.data));
+    });
+    handle("backup", async (e) => {
+      unlocked();
+      const d = await dialog.showSaveDialog(parent(e), {
+        defaultPath: `Kontor-${new Date().toISOString().slice(0, 10)}.kontorbackup`,
+        filters: [
+          { name: "Kontor-Windows-Sicherung", extensions: ["kontorbackup"] },
+        ],
+      });
+      if (d.canceled) return false;
+      vault.backup(d.filePath);
+      return true;
+    });
+    // Read-only preview for the cleanup settings; does not rewrite the vault.
+    handle("cleanupPreview", (_e, before) => {
+      const r = unlocked();
+      const c = r.archiveCandidates(before);
+      return {
+        archive: { entry: c.entry.length, note: c.note.length, todo: c.todo.length },
+        retention: r.retentionCandidates(),
+      };
+    });
+    handle("tour", (_e, done) => {
+      settings.tourDone = !!done;
+      saveSettings();
+      notify();
+    });
+    handle("openStartupSettings", () =>
+      shell.openExternal("ms-settings:startupapps"),
+    );
+    handle("openBackupDir", async () => {
+      fs.mkdirSync(backupDir(), { recursive: true });
+      const error = await shell.openPath(backupDir());
+      if (error) throw Error(error);
+    });
+    handle("restore", async (e, password) => {
+      const choice = await dialog.showMessageBox(parent(e), {
+        type: "warning",
+        message: "Aktuelle Daten durch eine Sicherung ersetzen?",
+        detail:
+          "Vor dem Import wird die aktuelle Datenbank automatisch gesichert. Verwenden Sie die Passphrase der Sicherung.",
+        buttons: ["Abbrechen", "Sicherung wählen"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (choice.response !== 1) return false;
+      const d = await dialog.showOpenDialog(parent(e), {
+        properties: ["openFile"],
+        filters: [
+          { name: "Kontor-Windows-Sicherung", extensions: ["kontorbackup"] },
+        ],
+      });
+      if (d.canceled) return false;
+      await vault.restore(d.filePaths[0], password);
+      notify();
+      return true;
+    });
+    handle("exportPDF", async (e, kind, key) => {
+      const d = await dialog.showSaveDialog(parent(e), {
+        defaultPath: exportName(kind, key) + ".pdf",
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      if (d.canceled) return false;
+      await withReport(kind, key, async (report) => {
+        const bytes = await report.webContents.printToPDF({
+          pageSize: "A4",
+          printBackground: true,
+          margins: { top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 },
+        });
+        atomicWrite(d.filePath, bytes);
+      });
+      return true;
+    });
+    handle("exportAs", async (e, kind, key, format) => {
+      if (!["md", "docx"].includes(format)) throw Error("Ungültiges Format.");
+      const md = markdownFor(unlocked(), kind, key);
+      const d = await dialog.showSaveDialog(parent(e), {
+        defaultPath: `${exportName(kind, key)}.${format}`,
+        filters: [
+          format === "md"
+            ? { name: "Markdown", extensions: ["md"] }
+            : { name: "Word-Dokument", extensions: ["docx"] },
+        ],
+      });
+      if (d.canceled) return false;
+      atomicWrite(
+        d.filePath,
+        format === "md" ? Buffer.from(md + "\n") : await docxFor(md),
+      );
+      return true;
+    });
+    handle("print", (_e, kind, key) =>
+      withReport(
+        kind,
+        key,
+        (report) =>
+          new Promise((resolve, reject) =>
+            report.webContents.print({ silent: false }, (ok, reason) =>
+              ok || reason === "cancelled"
+                ? resolve(ok)
+                : reject(Error("Drucken fehlgeschlagen: " + reason)),
+            ),
+          ),
+      ),
+    );
+    handle("exportAll", async (e) => {
+      const r = unlocked();
+      const d = await dialog.showOpenDialog(parent(e), {
+        title: "Ordner für den Export wählen",
+        properties: ["openDirectory", "createDirectory"],
+      });
+      if (d.canceled) return false;
+      const target = path.join(
+        d.filePaths[0],
+        `Kontor-Export-${new Date().toLocaleDateString("sv-SE")}`,
+      );
+      const count = exportAll(r, target);
+      if (!testMode) shell.openPath(target);
+      return { count, target };
+    });
+    handle("external", async (_e, url) => {
+      const u = new URL(url);
+      if (!["https:", "http:", "mailto:"].includes(u.protocol))
+        throw Error("Dieser Linktyp wird nicht unterstützt.");
+      await shell.openExternal(u.href);
+    });
+    handle("capture", () => capture());
+    handle("hideCapture", () => quick?.hide());
+    handle("showMain", () => showMain());
+    const menu = [
+      {
+        label: "Kontor",
+        submenu: [
+          {
+            label: "Schnellerfassung",
+            accelerator: "CmdOrCtrl+Alt+K",
+            click: capture,
+          },
+          {
+            label: "Sperren",
+            accelerator: "CmdOrCtrl+Shift+L",
+            click: () =>
+              lockVault().catch((e) =>
+                dialog.showErrorBox("Speichern fehlgeschlagen", e.message),
+              ),
+          },
+          { type: "separator" },
+          { role: "quit", label: "Beenden" },
+        ],
+      },
+      {
+        label: "Bearbeiten",
+        submenu: [
+          { role: "undo", label: "Rückgängig" },
+          { role: "redo", label: "Wiederholen" },
+          { type: "separator" },
+          { role: "cut", label: "Ausschneiden" },
+          { role: "copy", label: "Kopieren" },
+          { role: "paste", label: "Einfügen" },
+          { role: "selectAll", label: "Alles auswählen" },
+        ],
+      },
+      {
+        label: "Ansicht",
+        submenu: [
+          { role: "resetZoom", label: "Originalgröße" },
+          { role: "zoomIn", label: "Vergrößern" },
+          { role: "zoomOut", label: "Verkleinern" },
+          { role: "togglefullscreen", label: "Vollbild" },
+        ],
+      },
+    ];
+    win = createWindow();
+    optionalStartup(
+      "menu",
+      () => Menu.setApplicationMenu(Menu.buildFromTemplate(menu)),
+      log,
+    );
+    if (!testMode || process.env.KONTOR_TEST_NATIVE === "1") {
+      try {
+        registerHotkey(settings.hotkey);
+      } catch (e) {
+        settings.hotkeyError = e.message;
+      }
+      optionalStartup(
+        "tray",
+        () => {
+          tray = new Tray(
+            nativeImage
+              .createFromPath(path.join(base, "resources/icon.png"))
+              .resize({ width: 20, height: 20 }),
+          );
+          tray.setToolTip("Kontor · Schnellerfassung");
+          tray.setContextMenu(
+            Menu.buildFromTemplate([
+              { label: "Kontor öffnen", click: showMain },
+              { label: "Schnellerfassung", click: capture },
+              { label: "Beenden", click: () => app.quit() },
+            ]),
+          );
+          tray.on("click", capture);
+        },
+        log,
+      );
+    }
+    // Starting Kontor already shows it, so today counts as shown.
+    markShown();
+    for (const event of ["resume", "unlock-screen"])
+      powerMonitor.on(event, morning);
+    log.record("app.started");
+  })
+  .catch((error) => fatal("app.start.failed", error));
+app.on("second-instance", showMain);
+app.on("activate", showMain);
+app.on("window-all-closed", () => {
+  if (!tray) app.quit();
+});
+app.on("before-quit", (e) => {
+  if (quitting) {
+    globalShortcut.unregisterAll();
+    vault?.lock();
+    return;
+  }
+  e.preventDefault();
+  if (quittingPending) return;
+  quittingPending = true;
+  flushEditors()
+    .then(() => {
+      autoBackup(true);
+      quitting = true;
+      app.quit();
+    })
+    .catch((error) => {
+      quittingPending = false;
+      dialog.showErrorBox("Speichern fehlgeschlagen", error.message);
+    });
+});

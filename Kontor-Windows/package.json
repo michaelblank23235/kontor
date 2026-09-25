@@ -1,0 +1,84 @@
+{
+  "name": "kontor-windows",
+  "version": "0.2.0",
+  "description": "Kontor – Gespräche, Aufgaben und Notizen. Lokal auf Ihrem Rechner.",
+  "author": "Kontor",
+  "private": true,
+  "type": "module",
+  "main": "electron/bootstrap.cjs",
+  "scripts": {
+    "dev": "npm start",
+    "start": "npm run build && electron .",
+    "build": "vite build && node scripts/check-build.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "test:ui": "npm run build && node tests/smoke.cjs",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:mac": "npm run build && electron-builder --mac --arm64 --dir",
+    "test:integration": "npm run build && node tests/integration.cjs",
+    "test:startup": "npm run build && node tests/startup.cjs",
+    "dist:store": "powershell.exe -NoProfile -File scripts/build-store.ps1"
+  },
+  "build": {
+    "appId": "de.kontor.windows",
+    "productName": "Kontor Windows",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "resources/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ],
+      "icon": "resources/icon.ico",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": "always",
+      "include": "resources/installer.nsh"
+    },
+    "mac": {
+      "identity": null,
+      "category": "public.app-category.productivity"
+    },
+    "extraFiles": [
+      {
+        "from": "resources/Kontor-Diagnose.cmd",
+        "to": "Kontor-Diagnose.cmd"
+      }
+    ]
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "6.20.3",
+    "@codemirror/commands": "6.11.0",
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/state": "6.7.4",
+    "@codemirror/view": "6.43.11",
+    "@lezer/highlight": "1.2.3",
+    "codemirror": "6.0.2",
+    "docx": "9.7.1",
+    "dompurify": "3.4.15",
+    "lucide-react": "1.43.0",
+    "marked": "18.0.12",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "sql.js": "1.14.2"
+  },
+  "devDependencies": {
+    "electron": "44.2.0",
+    "electron-builder": "26.15.3",
+    "playwright": "1.63.0",
+    "prettier": "3.9.6",
+    "vite": "8.2.2"
+  }
+}
