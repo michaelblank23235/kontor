@@ -51,15 +51,14 @@ const empty = {
   folder: [],
   links: [],
   attachments: [],
+  types: [],
 };
-const types = [
-  "Elterngespräch",
-  "Schülergespräch",
-  "Personalgespräch",
-  "Telefonat",
-  "Vorfall",
-  "Sonstiges",
+// Configured types first, then types only still used by older entries.
+const typeNames = (data, extra = []) => [
+  ...new Set([...(data.types || []).map((t) => t.name), ...extra]),
 ];
+const templateOf = (data, name) =>
+  (data.types || []).find((t) => t.name === name)?.template || "";
 const recurrences = ["Keine", "Wöchentlich", "Monatlich", "Jährlich"];
 const navs = [
   ["dashboard", "Übersicht", LayoutDashboard],
@@ -492,7 +491,13 @@ function App() {
         {section === "dashboard" ? (
           <Dashboard {...tools} />
         ) : section === "settings" ? (
-          <SettingsPanel status={status} action={action} refresh={refresh} />
+          <SettingsPanel
+            status={status}
+            action={action}
+            refresh={refresh}
+            data={data}
+            command={command}
+          />
         ) : section === "inbox" ? (
           <InboxPanel {...tools} />
         ) : section === "person" ? (
@@ -539,7 +544,10 @@ function App() {
                       onChange={(e) => setType(e.target.value)}
                     >
                       <option value="">Alle Gesprächstypen</option>
-                      {types.map((t) => (
+                      {typeNames(
+                        data,
+                        data.entry.map((e) => e.type),
+                      ).map((t) => (
                         <option key={t}>{t}</option>
                       ))}
                     </select>
@@ -1011,24 +1019,30 @@ function EditDialog({
   onPersist,
   autosave = true,
 }) {
-  const [draft, setDraft] = useState(() => ({
-    date: new Date().toISOString(),
-    type: types[0],
-    confidentiality: "Normal",
-    subject: "",
-    title: "",
-    body: "",
-    note: "",
-    participants: [],
-    persons: [],
-    tags: [],
-    agreements: [],
-    dueDate: null,
-    status: "Offen",
-    recurrence: "Keine",
-    folderId: null,
-    ...item,
-  }));
+  const [draft, setDraft] = useState(() => {
+    const start = {
+      date: new Date().toISOString(),
+      type: data.types?.[0]?.name,
+      confidentiality: "Normal",
+      subject: "",
+      title: "",
+      body: "",
+      note: "",
+      participants: [],
+      persons: [],
+      tags: [],
+      agreements: [],
+      dueDate: null,
+      status: "Offen",
+      recurrence: "Keine",
+      folderId: null,
+      ...item,
+    };
+    // New conversations start with the outline of their type.
+    if (kind === "entry" && !item.id && !start.body)
+      start.body = templateOf(data, start.type);
+    return start;
+  });
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [saveState, setSaveState] = useState("");
@@ -1217,9 +1231,20 @@ function EditDialog({
                   Gesprächstyp
                   <select
                     value={draft.type}
-                    onChange={(e) => set("type", e.target.value)}
+                    onChange={(e) => {
+                      const type = e.target.value;
+                      // Swap the outline only while nothing was written into it.
+                      setDraft((d) => ({
+                        ...d,
+                        type,
+                        body:
+                          !d.body.trim() || d.body === templateOf(data, d.type)
+                            ? templateOf(data, type)
+                            : d.body,
+                      }));
+                    }}
                   >
-                    {types.map((t) => (
+                    {typeNames(data, [draft.type]).map((t) => (
                       <option key={t}>{t}</option>
                     ))}
                   </select>
@@ -2074,9 +2099,30 @@ function SearchPanel({ query, setQuery, data, navigate }) {
     </div>
   );
 }
-function Persons({ people, data, navigate, action }) {
+function Persons({ people, data, navigate, action, command, ask }) {
   const [q, setQ] = useState(""),
-    [person, setPerson] = useState(null);
+    [person, setPerson] = useState(null),
+    [rename, setRename] = useState(null);
+  function applyRename(e) {
+    e.preventDefault();
+    const to = rename.trim();
+    if (!to || to === person) return setRename(null);
+    const existing = people.find(
+      (p) => p !== person && words(p) === words(to),
+    );
+    const run = () =>
+      action(async () => {
+        await command("renamePerson", { from: person, to: existing || to });
+        setPerson(existing || to);
+        setRename(null);
+      });
+    if (existing)
+      ask(
+        `„${person}“ mit „${existing}“ zusammenführen? Alle Gespräche, Notizen und Vereinbarungen werden danach unter „${existing}“ geführt.`,
+        run,
+      );
+    else run();
+  }
   const entries = data.entry
     .filter((e) => e.participants.includes(person))
     .sort((a, b) => b.date.localeCompare(a.date));
@@ -2134,7 +2180,44 @@ function Persons({ people, data, navigate, action }) {
                 PDF exportieren
               </button>
             </div>
-            <h1>{person}</h1>
+            {rename === null ? (
+              <div className="person-title">
+                <h1>{person}</h1>
+                <button onClick={() => setRename(person)}>
+                  <Pencil size={14} />
+                  Umbenennen / zusammenführen
+                </button>
+              </div>
+            ) : (
+              <form className="person-rename" onSubmit={applyRename}>
+                <input
+                  autoFocus
+                  aria-label="Neuer Name"
+                  list="person-rename-suggestions"
+                  value={rename}
+                  onChange={(e) => setRename(e.target.value)}
+                />
+                <datalist id="person-rename-suggestions">
+                  {people
+                    .filter((p) => p !== person)
+                    .map((p) => (
+                      <option key={p} value={p} />
+                    ))}
+                </datalist>
+                <button type="submit" className="primary">
+                  Übernehmen
+                </button>
+                <button type="button" onClick={() => setRename(null)}>
+                  Abbrechen
+                </button>
+              </form>
+            )}
+            {rename !== null && (
+              <p className="small muted">
+                Tipp: Einen vorhandenen Namen wählen, um zwei Einträge derselben
+                Person zusammenzuführen.
+              </p>
+            )}
             <p className="muted">
               {entries.length} Gespräche · {notes.length} Notizen ·
               einschließlich Archiv
@@ -2666,7 +2749,99 @@ function PostponeDate({ onPick }) {
     </form>
   );
 }
-function SettingsPanel({ status, action, refresh }) {
+function TypeSettings({ data, command, action }) {
+  const [list, setList] = useState(() =>
+      data.types.map((t) => ({ ...t, previous: t.name })),
+    ),
+    [open, setOpen] = useState(null),
+    [saved, setSaved] = useState(false);
+  const edit = (i, patch) => {
+    setSaved(false);
+    setList((l) => l.map((t, j) => (j === i ? { ...t, ...patch } : t)));
+  };
+  return (
+    <section className="card">
+      <h2>
+        <MessagesSquare size={19} /> Gesprächstypen & Vorlagen
+      </h2>
+      <p className="small muted">
+        Die Vorlage steht in jedem neuen Gespräch dieses Typs bereits im
+        Protokoll. Umbenennen ändert auch vorhandene Gespräche; entfernte Typen
+        bleiben bei älteren Gesprächen erhalten.
+      </p>
+      <div className="type-list">
+        {list.map((t, i) => (
+          <div className="type-row" key={i}>
+            <div className="type-head">
+              <input
+                aria-label={`Name von Gesprächstyp ${i + 1}`}
+                value={t.name}
+                onChange={(e) => edit(i, { name: e.target.value })}
+              />
+              <button
+                type="button"
+                onClick={() => setOpen(open === i ? null : i)}
+              >
+                <Pencil size={14} />
+                Vorlage
+              </button>
+              <button
+                type="button"
+                aria-label={`${t.name || "Gesprächstyp"} entfernen`}
+                disabled={list.length === 1}
+                onClick={() => {
+                  setSaved(false);
+                  setOpen(null);
+                  setList((l) => l.filter((_, j) => j !== i));
+                }}
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+            {open === i && (
+              <textarea
+                aria-label={`Vorlage für ${t.name}`}
+                rows={8}
+                placeholder="Zum Beispiel: ## Anlass"
+                value={t.template}
+                onChange={(e) => edit(i, { template: e.target.value })}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="settings-buttons">
+        <button
+          type="button"
+          onClick={() => {
+            setSaved(false);
+            setList((l) => [...l, { name: "", template: "" }]);
+            setOpen(list.length);
+          }}
+        >
+          <Plus size={16} />
+          Typ hinzufügen
+        </button>
+        <button
+          type="button"
+          className="primary"
+          onClick={() =>
+            action(async () => {
+              const types = await command("saveTypes", { types: list });
+              setList(types.map((t) => ({ ...t, previous: t.name })));
+              setSaved(true);
+            })
+          }
+        >
+          <Check size={16} />
+          Typen speichern
+        </button>
+        {saved && <span className="success">Gespeichert.</span>}
+      </div>
+    </section>
+  );
+}
+function SettingsPanel({ status, action, refresh, data, command }) {
   const [settings, setSettings] = useState(status.settings),
     [password, setPassword] = useState(""),
     [message, setMessage] = useState("");
@@ -2685,6 +2860,7 @@ function SettingsPanel({ status, action, refresh }) {
         <p>Erscheinungsbild, PIN, Tastenkürzel und Sicherungen.</p>
       </div>
       <PinSettings />
+      <TypeSettings data={data} command={command} action={action} />
       <section className="card">
         <h2>
           <Sun size={19} /> Erscheinungsbild

@@ -1,13 +1,30 @@
 const { randomUUID } = require("node:crypto");
 const kinds = ["entry", "note", "todo", "inbox", "folder"];
-const entryTypes = [
-  "Elterngespräch",
-  "Schülergespräch",
-  "Personalgespräch",
-  "Telefonat",
-  "Vorfall",
-  "Sonstiges",
+// Defaults until the user edits the list; stored in meta.entryTypes afterwards.
+const defaultTypes = [
+  {
+    name: "Elterngespräch",
+    template:
+      "## Anlass\n\n\n## Sichtweise der Eltern\n\n\n## Sichtweise der Schule\n\n\n## Ergebnis\n\n",
+  },
+  {
+    name: "Schülergespräch",
+    template:
+      "## Anlass\n\n\n## Sichtweise der Schülerin / des Schülers\n\n\n## Ergebnis\n\n",
+  },
+  {
+    name: "Personalgespräch",
+    template: "## Anlass\n\n\n## Themen\n\n\n## Ergebnis\n\n",
+  },
+  { name: "Telefonat", template: "## Anlass\n\n\n## Inhalt\n\n" },
+  {
+    name: "Vorfall",
+    template:
+      "## Was ist passiert?\n\n\n## Ort und Zeit\n\n\n## Beteiligte und Zeugen\n\n\n## Sofortmaßnahmen\n\n\n## Weiteres Vorgehen\n\n",
+  },
+  { name: "Sonstiges", template: "" },
 ];
+const entryTypes = defaultTypes.map((t) => t.name);
 const statuses = ["Offen", "Erledigt", "Verschoben"];
 const recurrences = ["Keine", "Wöchentlich", "Monatlich", "Jährlich"];
 const now = () => new Date().toISOString();
@@ -106,9 +123,79 @@ class Repository {
     if (!item) throw Error("Der Eintrag wurde nicht gefunden.");
     return item;
   }
+  types() {
+    const stored = this.query("SELECT value FROM meta WHERE key=?", [
+      "entryTypes",
+    ])[0]?.value;
+    return stored ? JSON.parse(stored) : defaultTypes;
+  }
+  saveTypes(raw) {
+    if (!Array.isArray(raw) || raw.length < 1 || raw.length > 50)
+      throw Error("Bitte mindestens einen Gesprächstyp anlegen.");
+    const seen = new Set();
+    const list = raw.map((t) => {
+      const name = text(t?.name || "", 60).trim();
+      if (!name) throw Error("Jeder Gesprächstyp braucht einen Namen.");
+      const key = name.toLocaleLowerCase("de");
+      if (seen.has(key)) throw Error(`„${name}“ ist doppelt vorhanden.`);
+      seen.add(key);
+      return { name, template: text(t.template || "", 20000) };
+    });
+    // Renamed types carry their previous name so existing entries follow.
+    raw.forEach((t, i) => {
+      const previous = typeof t.previous === "string" ? t.previous : null;
+      if (previous && previous !== list[i].name)
+        for (const e of this.all("entry").filter((e) => e.type === previous))
+          this.put("entry", { ...e, type: list[i].name });
+    });
+    this.db.run("INSERT OR REPLACE INTO meta VALUES ('entryTypes',?)", [
+      JSON.stringify(list),
+    ]);
+    return list;
+  }
+  renamePerson(from, to) {
+    from = text(from || "", 300);
+    to = text(to || "", 300).trim();
+    if (!to) throw Error("Bitte einen Namen eingeben.");
+    const swap = (list) => names(list.map((x) => (x === from ? to : x)));
+    let changed = 0;
+    for (const e of this.all("entry")) {
+      const hit =
+        e.participants.includes(from) ||
+        e.agreements.some((a) => a.responsible === from);
+      if (!hit) continue;
+      changed++;
+      this.put("entry", {
+        ...e,
+        participants: swap(e.participants),
+        agreements: e.agreements.map((a) =>
+          a.responsible === from ? { ...a, responsible: to } : a,
+        ),
+      });
+    }
+    for (const n of this.all("note").filter((n) => n.persons.includes(from))) {
+      changed++;
+      this.put("note", { ...n, persons: swap(n.persons) });
+    }
+    // Tasks created from agreements carry the responsible person in their note.
+    const line = `Verantwortlich: ${from}`;
+    for (const t of this.all("todo").filter(
+      (t) => t.entryId && t.note.split("\n").includes(line),
+    ))
+      this.put("todo", {
+        ...t,
+        note: t.note
+          .split("\n")
+          .map((l) => (l === line ? `Verantwortlich: ${to}` : l))
+          .join("\n"),
+      });
+    if (!changed) throw Error("Diese Person wurde nicht gefunden.");
+    return changed;
+  }
   snapshot() {
     return {
       ...Object.fromEntries(kinds.map((k) => [k, this.all(k)])),
+      types: this.types(),
       links: this.query("SELECT * FROM link"),
       attachments: this.query(
         "SELECT id,noteId,filename,mime,length(data) AS byteCount FROM attachment",
@@ -148,7 +235,15 @@ class Repository {
         subject: text(raw.subject || "", 1000),
         body: text(raw.body || ""),
         date: date(raw.date || now(), false),
-        type: choice(raw.type, entryTypes, entryTypes[0]),
+        // Entries keep a type that was later removed from the list.
+        type:
+          raw.type && raw.type === old?.type
+            ? old.type
+            : choice(
+                raw.type,
+                this.types().map((t) => t.name),
+                this.types()[0].name,
+              ),
         confidentiality: choice(
           raw.confidentiality,
           ["Normal", "Sensibel"],
@@ -395,6 +490,10 @@ class Repository {
           args.bId,
           args.enabled,
         );
+      case "saveTypes":
+        return this.saveTypes(args.types);
+      case "renamePerson":
+        return this.renamePerson(args.from, args.to);
       case "removeAttachment":
         this.db.run("DELETE FROM attachment WHERE id=?", [args.id]);
         return;
@@ -419,4 +518,11 @@ class Repository {
     }
   }
 }
-module.exports = { Repository, nextDue, entryTypes, statuses, recurrences };
+module.exports = {
+  Repository,
+  nextDue,
+  entryTypes,
+  defaultTypes,
+  statuses,
+  recurrences,
+};

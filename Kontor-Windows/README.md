@@ -17,6 +17,8 @@ Beim ersten Start eine PIN aus genau vier Ziffern vergeben (führende Nullen sin
 
 - Übersicht mit offenen/heute fälligen Aufgaben, letzten Gesprächen, Notizen und Inbox.
 - Gespräche und Vorfälle mit Datum, Typ, Vertraulichkeit, Beteiligten, Markdown-Protokoll und Vereinbarungen; Bearbeiten, Suchen, Zeitraumfilter, Archivieren, Reaktivieren und endgültiges Löschen.
+- Eigene Gesprächstypen mit Vorlagen (Einstellungen): Neue Gespräche starten mit der Gliederung ihres Typs, solange noch nichts hineingeschrieben wurde. Umbenennen ändert vorhandene Gespräche mit; entfernte Typen bleiben bei älteren Gesprächen erhalten. Typen und Vorlagen liegen in der verschlüsselten Datenbank und sind Teil jeder Sicherung.
+- Personen umbenennen oder zusammenführen, einschließlich Beteiligten, Notiz-Personen und Verantwortlichen in Vereinbarungen.
 - Vereinbarungen erzeugen Aufgaben. Erneutes Speichern aktualisiert vorhandene Aufgaben. Entfernte Vereinbarungen entfernen zugehörige offene Aufgaben.
 - Optional „Kontor morgens anzeigen“: Beim ersten Aufklappen oder Entsperren des Rechners an einem Tag holt sich Kontor mit der Übersicht nach vorn. Dafür startet Kontor mit Windows (Store-Version: in den Windows-Einstellungen unter Apps > Autostart einschalten).
 - Aufgaben mit Fristen, Status, Verschieben auf morgen, nächsten Montag, um eine Woche oder auf ein gewähltes Datum, Wiederholung wöchentlich/monatlich/jährlich, Archiv und Filtern. Erledigen erzeugt genau eine Folgeaufgabe; Monatsenden werden berücksichtigt.

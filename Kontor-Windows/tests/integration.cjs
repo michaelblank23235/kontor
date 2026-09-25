@@ -211,6 +211,59 @@ async function until(fn) {
     assert.equal(await wake("resume"), false, "only once per day");
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show());
     await p.getByRole("button", { name: "Einstellungen", exact: true }).click();
+    // Conversation types: rename, add with template, template fills new entries.
+    await p.getByLabel("Name von Gesprächstyp 5").fill("Vorfallsprotokoll");
+    await p.getByRole("button", { name: "Typ hinzufügen" }).click();
+    await p.getByLabel("Name von Gesprächstyp 7").fill("Klassenkonferenz");
+    await p
+      .getByLabel("Vorlage für Klassenkonferenz")
+      .fill("## Tagesordnung\n\n## Beschlüsse\n");
+    await p.getByRole("button", { name: "Typen speichern" }).click();
+    await p.getByText("Gespeichert.", { exact: true }).waitFor();
+    await p.screenshot({ path: "test-results/types.png" });
+    assert.deepEqual(
+      (await p.evaluate(() => window.kontor.snapshot())).types
+        .slice(4)
+        .map((t) => t.name),
+      ["Vorfallsprotokoll", "Sonstiges", "Klassenkonferenz"],
+    );
+    await p.getByRole("button", { name: "Gespräche", exact: true }).click();
+    await p.getByRole("button", { name: "Neues Gespräch" }).click();
+    const protocol = p.getByRole("textbox", { name: "Protokoll", exact: true });
+    await until(async () => (await protocol.innerText()).includes("Anlass"));
+    await p
+      .locator(".modal")
+      .getByLabel(/^Gesprächstyp/)
+      .selectOption("Klassenkonferenz");
+    await until(async () => (await protocol.innerText()).includes("Tagesordnung"));
+    await p.getByLabel("Betreff", { exact: true }).fill("Konferenz 7b");
+    await p.getByLabel("Beteiligte", { exact: true }).fill("Max M.");
+    await p.getByLabel("Beteiligte", { exact: true }).press("Enter");
+    await p.getByRole("button", { name: "Speichern", exact: true }).click();
+    await p.getByRole("heading", { name: "Konferenz 7b", exact: true }).waitFor();
+    // Merge two spellings of the same person.
+    await p.evaluate(() =>
+      window.kontor.command("save", {
+        kind: "note",
+        item: { title: "Beobachtung", persons: ["Max Müller"] },
+      }),
+    );
+    await p.getByRole("button", { name: "Personen", exact: true }).click();
+    await p.getByRole("button").filter({ hasText: /^M?MMax M\.$/ }).first().click();
+    await p
+      .getByRole("button", { name: "Umbenennen / zusammenführen" })
+      .click();
+    await p.getByLabel("Neuer Name").fill("Max Müller");
+    await p.getByRole("button", { name: "Übernehmen", exact: true }).click();
+    await p.getByRole("button", { name: "Bestätigen", exact: true }).click();
+    await p.getByRole("heading", { name: "Max Müller", exact: true }).waitFor();
+    await p.screenshot({ path: "test-results/person-merged.png" });
+    const merged = await p.evaluate(() => window.kontor.snapshot());
+    const konferenz = merged.entry.find((e) => e.subject === "Konferenz 7b");
+    assert.equal(konferenz.type, "Klassenkonferenz");
+    assert.ok(konferenz.body.includes("Tagesordnung"));
+    assert.deepEqual(konferenz.participants, ["Max Müller"]);
+    await p.getByRole("button", { name: "Einstellungen", exact: true }).click();
     await p.getByLabel("Farbschema").selectOption("light");
     await p
       .getByRole("button", { name: "Einstellungen speichern", exact: true })
@@ -237,7 +290,7 @@ async function until(fn) {
     );
     assert.deepEqual(errors, []);
     console.log(
-      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, automatic backup, postpone, morning show, theme, IPC isolation.",
+      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, automatic backup, postpone, morning show, types and templates, person merge, theme, IPC isolation.",
     );
   } finally {
     await app?.close();

@@ -1676,3 +1676,34 @@ kbd {
     padding-top: 12px;
   }
 }
+.type-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0;
+}
+.type-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.type-head input {
+  flex: 1;
+}
+.type-row textarea {
+  width: 100%;
+  margin-top: 8px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+.person-title,
+.person-rename {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.person-rename input {
+  flex: 1;
+  max-width: 360px;
+}

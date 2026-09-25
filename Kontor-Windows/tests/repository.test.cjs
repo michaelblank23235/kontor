@@ -6,6 +6,49 @@ async function setup() {
   const SQL = await init();
   return new Repository(new SQL.Database());
 }
+test("Gesprächstypen: Standard, Umbenennen zieht Gespräche mit, entfernte Typen bleiben erhalten", async () => {
+  const r = await setup();
+  assert.equal(r.types()[0].name, "Elterngespräch");
+  assert.match(r.types()[4].template, /Was ist passiert/);
+  const e = r.save("entry", { subject: "Streit", type: "Vorfall" });
+  const t = r.save("entry", { subject: "Anruf", type: "Telefonat" });
+  r.saveTypes([
+    { name: "Vorfallsprotokoll", template: "## Hergang\n", previous: "Vorfall" },
+    { name: "Klassenkonferenz", template: "" },
+  ]);
+  assert.deepEqual(
+    r.types().map((x) => x.name),
+    ["Vorfallsprotokoll", "Klassenkonferenz"],
+  );
+  assert.equal(r.get("entry", e.id).type, "Vorfallsprotokoll");
+  // "Telefonat" no longer exists, but the old entry keeps it and stays editable.
+  assert.equal(r.save("entry", { ...t, body: "Neu" }).type, "Telefonat");
+  assert.throws(() => r.save("entry", { subject: "X", type: "Telefonat" }));
+  assert.equal(r.save("entry", { subject: "Y" }).type, "Vorfallsprotokoll");
+  assert.throws(() => r.saveTypes([]), /mindestens einen/);
+  assert.throws(() => r.saveTypes([{ name: " " }]), /Namen/);
+  assert.throws(
+    () => r.saveTypes([{ name: "A" }, { name: "a" }]),
+    /doppelt/,
+  );
+});
+test("Person umbenennen und zusammenführen", async () => {
+  const r = await setup();
+  const e = r.save("entry", {
+    subject: "Elternabend",
+    participants: ["Max M.", "Frau Meyer", "Max Müller"],
+    agreements: [{ text: "Rückmeldung", responsible: "Max M." }],
+  });
+  const n = r.save("note", { title: "Beobachtung", persons: ["Max M."] });
+  assert.equal(r.renamePerson("Max M.", "Max Müller"), 2);
+  const after = r.get("entry", e.id);
+  assert.deepEqual(after.participants, ["Max Müller", "Frau Meyer"]);
+  assert.equal(after.agreements[0].responsible, "Max Müller");
+  assert.match(r.get("todo", after.agreements[0].taskId).note, /Verantwortlich: Max Müller/);
+  assert.deepEqual(r.get("note", n.id).persons, ["Max Müller"]);
+  assert.throws(() => r.renamePerson("Niemand", "X"), /nicht gefunden/);
+  assert.throws(() => r.renamePerson("Frau Meyer", " "), /Namen/);
+});
 test("Verschieben: ohne Datum eine Woche, mit Datum genau dorthin", async () => {
   const r = await setup();
   const t = r.save("todo", {
