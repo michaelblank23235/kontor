@@ -7,7 +7,7 @@ const {
   Tray,
   globalShortcut,
   nativeImage,
-  Notification,
+  powerMonitor,
   shell,
   session,
 } = require("electron");
@@ -16,7 +16,6 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { Vault, atomicWrite } = require("./vault.cjs");
 const { optionalStartup } = require("./startup.cjs");
-const { reminder, validTime } = require("./reminders.cjs");
 const { log, fatal } = global.kontorStartup;
 log.record("main.loaded");
 // Packaged Store apps use the identity assigned by Windows.
@@ -85,34 +84,27 @@ function saveSettings() {
   const { hotkeyError, backupError, ...stored } = settings;
   atomicWrite(settingsFile, Buffer.from(JSON.stringify(stored)));
 }
-function showReminder(title, body) {
-  const n = new Notification({
-    title: "Kontor · " + title,
-    body,
-    icon: path.join(base, "resources/icon.png"),
-  });
-  n.on("click", () => {
-    showMain();
-    win?.webContents.send("kontor:navigate", "todo");
-  });
-  n.show();
+// Tests can move to "another day" without waiting; ignored outside test mode.
+const today = () =>
+  (testMode && process.env.KONTOR_TEST_DAY) ||
+  new Date().toLocaleDateString("sv-SE");
+function markShown() {
+  if (settings.shownOn === today()) return;
+  settings.shownOn = today();
+  saveSettings();
 }
-// Only possible while unlocked: due dates are inside the encrypted database.
-function remind({ silent = false } = {}) {
-  if (settings?.reminders === false || !vault?.repo) return;
-  try {
-    const r = reminder(vault.repo.all("todo"), {
-      at: settings.reminderTime,
-      remindedOn: settings.remindedOn,
-    });
-    if (!r) return;
-    settings.remindedOn = r.today;
-    saveSettings();
-    if (silent || !r.title || !Notification.isSupported()) return;
-    showReminder(r.title, r.body);
-  } catch (error) {
-    log.record("reminder.failed", { message: error.message });
-  }
+// Opt-in: the first wake of a new day brings the overview forward. Needs no
+// decrypted data, so it also works while Kontor is locked.
+function morning() {
+  if (!settings?.morningShow || settings.shownOn === today()) return;
+  markShown();
+  showMain();
+  win?.webContents.send("kontor:navigate", "dashboard");
+}
+// Store packages declare a disabled StartupTask; users switch it on in Windows.
+function applyLoginItem() {
+  if (process.windowsStore || testMode) return;
+  app.setLoginItemSettings({ openAtLogin: !!settings.morningShow });
 }
 async function lockVault() {
   await flushEditors();
@@ -327,8 +319,7 @@ app
       theme: "dark",
       hotkey: "Control+Alt+K",
       autoBackup: true,
-      reminders: true,
-      reminderTime: "07:00",
+      morningShow: false,
       ...settings,
     };
     session.defaultSession.setPermissionRequestHandler((_wc, _p, cb) =>
@@ -349,13 +340,13 @@ app
         exists: vault.exists,
         unlocked: !!vault.repo,
         settings: { ...settings, backupDir: backupDir() },
+        windowsStore: !!process.windowsStore,
       };
     });
     handle("unlock", async (_e, password) => {
       await vault.unlock(password);
       autoBackup();
-      // The dashboard already shows what is due right after unlocking.
-      remind({ silent: true });
+      markShown();
       notify();
       return vault.repo.snapshot();
     });
@@ -377,21 +368,19 @@ app
         throw Error("Ungültiges Tastenkürzel.");
       if (typeof values.autoBackup !== "boolean")
         throw Error("Ungültige Sicherungseinstellung.");
-      if (typeof values.reminders !== "boolean")
-        throw Error("Ungültige Erinnerungseinstellung.");
-      if (!validTime(values.reminderTime))
-        throw Error("Bitte eine Uhrzeit wie 07:00 eingeben.");
+      if (typeof values.morningShow !== "boolean")
+        throw Error("Ungültige Einstellung für den Morgenstart.");
       if (values.hotkey !== settings.hotkey) registerHotkey(values.hotkey);
       settings = {
         theme: values.theme,
         hotkey: values.hotkey,
         autoBackup: values.autoBackup,
-        reminders: values.reminders,
-        reminderTime: values.reminderTime,
+        morningShow: values.morningShow,
         lastBackup: settings.lastBackup,
-        remindedOn: settings.remindedOn,
+        shownOn: settings.shownOn,
       };
       saveSettings();
+      applyLoginItem();
       notify();
       return settings;
     });
@@ -469,18 +458,9 @@ app
       vault.backup(d.filePath);
       return true;
     });
-    // Shows today's reminder immediately, ignoring time and "already reminded".
-    handle("testReminder", () => {
-      if (!Notification.isSupported())
-        throw Error("Windows-Benachrichtigungen sind nicht verfügbar.");
-      const r = reminder(unlocked().all("todo"), { at: "00:00" });
-      if (r.title) showReminder(r.title, r.body);
-      else
-        showReminder(
-          "Keine fälligen Aufgaben",
-          "So sieht die tägliche Erinnerung aus, wenn Aufgaben fällig sind.",
-        );
-    });
+    handle("openStartupSettings", () =>
+      shell.openExternal("ms-settings:startupapps"),
+    );
     handle("openBackupDir", async () => {
       fs.mkdirSync(backupDir(), { recursive: true });
       const error = await shell.openPath(backupDir());
@@ -626,7 +606,10 @@ app
         log,
       );
     }
-    if (!testMode) setInterval(remind, 5 * 60 * 1000);
+    // Starting Kontor already shows it, so today counts as shown.
+    markShown();
+    for (const event of ["resume", "unlock-screen"])
+      powerMonitor.on(event, morning);
     log.record("app.started");
   })
   .catch((error) => fatal("app.start.failed", error));

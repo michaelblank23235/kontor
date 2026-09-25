@@ -39,7 +39,6 @@ import {
   CheckCircle2,
   PanelLeft,
   Tag,
-  Bell,
 } from "lucide-react";
 import { Markdown, MarkdownEditor } from "./Markdown";
 import "./style.css";
@@ -2741,60 +2740,40 @@ function SettingsPanel({ status, action, refresh }) {
       </section>
       <section className="card">
         <h2>
-          <Bell size={19} /> Erinnerungen
+          <Sun size={19} /> Guten Morgen
         </h2>
         <div className="settings-line">
           <div>
-            <strong>Tägliche Erinnerung</strong>
+            <strong>Kontor morgens anzeigen</strong>
             <p>
-              Windows-Benachrichtigung zu fälligen und überfälligen Aufgaben,
-              einmal pro Tag.
+              Beim ersten Aufklappen oder Entsperren des Rechners an einem Tag
+              holt sich Kontor nach vorn und zeigt die Übersicht mit fälligen
+              Aufgaben. Danach bleibt Kontor bis zum nächsten Tag im
+              Hintergrund.
             </p>
           </div>
           <input
             type="checkbox"
-            aria-label="Tägliche Erinnerung"
-            checked={status.settings.reminders !== false}
-            onChange={(e) => saveNow({ reminders: e.target.checked })}
+            aria-label="Kontor morgens anzeigen"
+            checked={!!status.settings.morningShow}
+            onChange={(e) => saveNow({ morningShow: e.target.checked })}
           />
         </div>
-        {status.settings.reminders !== false && (
-          <>
-            <div className="settings-line">
-              <div>
-                <strong>Uhrzeit</strong>
-                <p>Frühestens ab dieser Uhrzeit.</p>
-              </div>
-              <input
-                type="time"
-                aria-label="Uhrzeit der Erinnerung"
-                value={status.settings.reminderTime || "07:00"}
-                onChange={(e) =>
-                  e.target.value && saveNow({ reminderTime: e.target.value })
-                }
-              />
-            </div>
-            <p className="hint">
-              Kontor muss dafür entsperrt im Infobereich laufen, denn die
-              Fristen sind verschlüsselt gespeichert. Ist Kontor gesperrt,
-              sehen Sie fällige Aufgaben nach dem Entsperren in der Übersicht.
-            </p>
-            <div className="settings-buttons">
-              <button
-                onClick={() =>
-                  action(async () => {
-                    await api.testReminder();
-                    setMessage(
-                      "Benachrichtigung gesendet. Falls nichts erscheint, Benachrichtigungen für Kontor in den Windows-Einstellungen erlauben.",
-                    );
-                  })
-                }
-              >
-                <Bell size={16} />
-                Jetzt testen
-              </button>
-            </div>
-          </>
+        {status.settings.morningShow && (
+          <p className="hint">
+            Kontor muss dafür im Infobereich laufen.{" "}
+            {status.windowsStore
+              ? "Damit das auch nach einem Neustart klappt, Kontor in den Windows-Einstellungen unter Autostart einschalten."
+              : "Kontor startet dafür automatisch mit Windows."}
+          </p>
+        )}
+        {status.settings.morningShow && status.windowsStore && (
+          <div className="settings-buttons">
+            <button onClick={() => action(() => api.openStartupSettings())}>
+              <ArrowUpRight size={16} />
+              Autostart in Windows öffnen
+            </button>
+          </div>
         )}
       </section>
       <section className="card">

@@ -185,21 +185,32 @@ async function until(fn) {
     await until(async () => (await dueOf()) === localDay(30));
     await p.screenshot({ path: "test-results/postpone.png" });
     await p.getByRole("button", { name: "Einstellungen", exact: true }).click();
-    // Reminder settings save immediately and validate the time.
-    const reminderToggle = p.getByLabel("Tägliche Erinnerung", { exact: true });
-    assert.equal(await reminderToggle.isChecked(), true);
-    await p.getByLabel("Uhrzeit der Erinnerung").fill("06:45");
+    // Morning show: opt-in, only on the first wake of a new day.
+    const morningToggle = p.getByLabel("Kontor morgens anzeigen", { exact: true });
+    assert.equal(await morningToggle.isChecked(), false);
+    await morningToggle.click();
     await until(async () =>
-      p.evaluate(async () => (await window.kontor.status()).settings.reminderTime === "06:45"),
+      p.evaluate(async () => (await window.kontor.status()).settings.morningShow === true),
     );
-    await reminderToggle.click();
-    await until(async () =>
-      p.evaluate(async () => (await window.kontor.status()).settings.reminders === false),
-    );
-    await reminderToggle.click();
-    await until(async () =>
-      p.evaluate(async () => (await window.kontor.status()).settings.reminders === true),
-    );
+    await p.getByRole("button", { name: "Aufgaben", exact: true }).click();
+    const wake = (event, day) =>
+      app.evaluate(
+        ({ BrowserWindow, powerMonitor }, [event, day]) => {
+          if (day) process.env.KONTOR_TEST_DAY = day;
+          BrowserWindow.getAllWindows()[0].hide();
+          powerMonitor.emit(event);
+          return new Promise((r) =>
+            setTimeout(() => r(BrowserWindow.getAllWindows()[0].isVisible()), 300),
+          );
+        },
+        [event, day],
+      );
+    assert.equal(await wake("resume"), false, "same day stays in background");
+    assert.equal(await wake("unlock-screen", "2099-01-01"), true, "new day shows Kontor");
+    await p.getByRole("heading", { name: "Alles im Blick." }).waitFor();
+    assert.equal(await wake("resume"), false, "only once per day");
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show());
+    await p.getByRole("button", { name: "Einstellungen", exact: true }).click();
     await p.getByLabel("Farbschema").selectOption("light");
     await p
       .getByRole("button", { name: "Einstellungen speichern", exact: true })
@@ -226,7 +237,7 @@ async function until(fn) {
     );
     assert.deepEqual(errors, []);
     console.log(
-      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, automatic backup, postpone, reminder settings, theme, IPC isolation.",
+      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, automatic backup, postpone, morning show, theme, IPC isolation.",
     );
   } finally {
     await app?.close();

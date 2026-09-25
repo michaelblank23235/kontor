@@ -51,7 +51,7 @@ try {
   } finally { $image.Dispose() }
   $manifest = @"
 <?xml version="1.0" encoding="utf-8"?>
-<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" IgnorableNamespaces="uap rescap">
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10" IgnorableNamespaces="uap rescap desktop">
   <Identity Name="$(XmlText $IdentityName)" Publisher="$(XmlText $Publisher)" Version="$version" ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>$(XmlText $DisplayName)</DisplayName>
@@ -63,6 +63,12 @@ try {
   <Applications>
     <Application Id="Kontor" Executable="app\Kontor Windows.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements DisplayName="$(XmlText $DisplayName)" Description="Gespräche, Aufgaben und Notizen lokal organisieren." BackgroundColor="#7c5cfc" Square150x150Logo="Assets\Logo150.png" Square44x44Logo="Assets\Logo44.png" />
+      <Extensions>
+        <!-- Off by default; users switch it on under Windows Settings > Apps > Startup. -->
+        <desktop:Extension Category="windows.startupTask" Executable="app\Kontor Windows.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="KontorStartup" Enabled="false" DisplayName="$(XmlText $DisplayName)" />
+        </desktop:Extension>
+      </Extensions>
     </Application>
   </Applications>
   <Capabilities><rescap:Capability Name="runFullTrust" /></Capabilities>
