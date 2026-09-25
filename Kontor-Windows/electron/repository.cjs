@@ -373,11 +373,16 @@ class Repository {
         return this.complete(args.id);
       case "postpone": {
         const t = this.require("todo", args.id);
-        const d = new Date(t.dueDate || now());
-        d.setDate(d.getDate() + 7);
+        // Without an explicit date, keep the original one-week behaviour.
+        let dueDate = date(args.dueDate);
+        if (!dueDate) {
+          const d = new Date(t.dueDate || now());
+          d.setDate(d.getDate() + 7);
+          dueDate = d.toISOString();
+        }
         return this.put("todo", {
           ...t,
-          dueDate: d.toISOString(),
+          dueDate,
           status: "Offen",
           completedAt: null,
         });

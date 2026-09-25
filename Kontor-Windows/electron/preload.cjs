@@ -38,6 +38,11 @@ contextBridge.exposeInMainWorld("kontor", {
       flushHandler = async () => {};
     };
   },
+  onNavigate: (fn) => {
+    const listener = (_e, section) => fn(section);
+    ipcRenderer.on("kontor:navigate", listener);
+    return () => ipcRenderer.removeListener("kontor:navigate", listener);
+  },
   onChanged: (fn) => {
     const listener = () => fn();
     ipcRenderer.on("kontor:changed", listener);

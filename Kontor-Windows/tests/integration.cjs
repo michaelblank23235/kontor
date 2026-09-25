@@ -151,7 +151,55 @@ async function until(fn) {
       ),
       false,
     );
+    // Postpone a task via the quick buttons and the date picker.
+    const task = await p.evaluate(() =>
+      window.kontor.command("save", {
+        kind: "todo",
+        item: { title: "Elternbrief verschicken", dueDate: new Date().toISOString() },
+      }),
+    );
+    await p.getByRole("button", { name: "Aufgaben", exact: true }).click();
+    await p
+      .getByRole("button")
+      .filter({ hasText: "Elternbrief verschicken" })
+      .first()
+      .click();
+    const dueOf = () =>
+      p.evaluate(
+        async (id) => {
+          const t = (await window.kontor.snapshot()).todo.find((x) => x.id === id);
+          const d = new Date(t.dueDate);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        },
+        task.id,
+      );
+    const localDay = (offset) => {
+      const d = new Date();
+      d.setDate(d.getDate() + offset);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    await p.getByRole("button", { name: "Morgen", exact: true }).click();
+    await until(async () => (await dueOf()) === localDay(1));
+    await p.getByLabel("Auf Datum verschieben").fill(localDay(30));
+    await p.getByRole("button", { name: "OK", exact: true }).click();
+    await until(async () => (await dueOf()) === localDay(30));
+    await p.screenshot({ path: "test-results/postpone.png" });
     await p.getByRole("button", { name: "Einstellungen", exact: true }).click();
+    // Reminder settings save immediately and validate the time.
+    const reminderToggle = p.getByLabel("Tägliche Erinnerung", { exact: true });
+    assert.equal(await reminderToggle.isChecked(), true);
+    await p.getByLabel("Uhrzeit der Erinnerung").fill("06:45");
+    await until(async () =>
+      p.evaluate(async () => (await window.kontor.status()).settings.reminderTime === "06:45"),
+    );
+    await reminderToggle.click();
+    await until(async () =>
+      p.evaluate(async () => (await window.kontor.status()).settings.reminders === false),
+    );
+    await reminderToggle.click();
+    await until(async () =>
+      p.evaluate(async () => (await window.kontor.status()).settings.reminders === true),
+    );
     await p.getByLabel("Farbschema").selectOption("light");
     await p
       .getByRole("button", { name: "Einstellungen speichern", exact: true })
@@ -168,7 +216,7 @@ async function until(fn) {
     const toggle = p.getByLabel("Automatische Sicherung", { exact: true });
     assert.equal(await toggle.isChecked(), true);
     await p.getByText(autoDir, { exact: false }).waitFor();
-    await toggle.uncheck();
+    await toggle.click();
     await until(async () =>
       p.evaluate(async () => (await window.kontor.status()).settings.autoBackup === false),
     );
@@ -178,7 +226,7 @@ async function until(fn) {
     );
     assert.deepEqual(errors, []);
     console.log(
-      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, automatic backup, theme, IPC isolation.",
+      "Integration passed: autosave + lock flush, Markdown safety, checkbox, folders, archive, pin, attachments, PDF, backup/restore, automatic backup, postpone, reminder settings, theme, IPC isolation.",
     );
   } finally {
     await app?.close();

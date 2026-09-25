@@ -939,7 +939,23 @@ small {
 .todo-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+}
+.postpone-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.postpone-date {
+  display: flex;
+  gap: 6px;
+}
+.postpone-date input {
+  width: auto;
 }
 .completed {
   text-decoration: line-through;

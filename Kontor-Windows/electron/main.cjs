@@ -7,6 +7,7 @@ const {
   Tray,
   globalShortcut,
   nativeImage,
+  Notification,
   shell,
   session,
 } = require("electron");
@@ -15,6 +16,7 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { Vault, atomicWrite } = require("./vault.cjs");
 const { optionalStartup } = require("./startup.cjs");
+const { reminder, validTime } = require("./reminders.cjs");
 const { log, fatal } = global.kontorStartup;
 log.record("main.loaded");
 // Packaged Store apps use the identity assigned by Windows.
@@ -71,12 +73,42 @@ function autoBackup(force = false) {
   try {
     if (vault.autoBackup(backupDir(), { force })) {
       settings.lastBackup = new Date().toISOString();
-      atomicWrite(settingsFile, Buffer.from(JSON.stringify(settings)));
+      saveSettings();
     }
     delete settings.backupError;
   } catch (error) {
     settings.backupError = error.message;
     log.record("backup.auto.failed", { message: error.message });
+  }
+}
+function saveSettings() {
+  const { hotkeyError, backupError, ...stored } = settings;
+  atomicWrite(settingsFile, Buffer.from(JSON.stringify(stored)));
+}
+// Only possible while unlocked: due dates are inside the encrypted database.
+function remind({ silent = false } = {}) {
+  if (settings?.reminders === false || !vault?.repo) return;
+  try {
+    const r = reminder(vault.repo.all("todo"), {
+      at: settings.reminderTime,
+      remindedOn: settings.remindedOn,
+    });
+    if (!r) return;
+    settings.remindedOn = r.today;
+    saveSettings();
+    if (silent || !r.title || !Notification.isSupported()) return;
+    const n = new Notification({
+      title: "Kontor · " + r.title,
+      body: r.body,
+      icon: path.join(base, "resources/icon.png"),
+    });
+    n.on("click", () => {
+      showMain();
+      win?.webContents.send("kontor:navigate", "todo");
+    });
+    n.show();
+  } catch (error) {
+    log.record("reminder.failed", { message: error.message });
   }
 }
 async function lockVault() {
@@ -292,6 +324,8 @@ app
       theme: "dark",
       hotkey: "Control+Alt+K",
       autoBackup: true,
+      reminders: true,
+      reminderTime: "07:00",
       ...settings,
     };
     session.defaultSession.setPermissionRequestHandler((_wc, _p, cb) =>
@@ -317,6 +351,8 @@ app
     handle("unlock", async (_e, password) => {
       await vault.unlock(password);
       autoBackup();
+      // The dashboard already shows what is due right after unlocking.
+      remind({ silent: true });
       notify();
       return vault.repo.snapshot();
     });
@@ -338,14 +374,21 @@ app
         throw Error("Ungültiges Tastenkürzel.");
       if (typeof values.autoBackup !== "boolean")
         throw Error("Ungültige Sicherungseinstellung.");
+      if (typeof values.reminders !== "boolean")
+        throw Error("Ungültige Erinnerungseinstellung.");
+      if (!validTime(values.reminderTime))
+        throw Error("Bitte eine Uhrzeit wie 07:00 eingeben.");
       if (values.hotkey !== settings.hotkey) registerHotkey(values.hotkey);
       settings = {
         theme: values.theme,
         hotkey: values.hotkey,
         autoBackup: values.autoBackup,
+        reminders: values.reminders,
+        reminderTime: values.reminderTime,
         lastBackup: settings.lastBackup,
+        remindedOn: settings.remindedOn,
       };
-      atomicWrite(settingsFile, Buffer.from(JSON.stringify(settings)));
+      saveSettings();
       notify();
       return settings;
     });
@@ -568,6 +611,7 @@ app
         log,
       );
     }
+    if (!testMode) setInterval(remind, 5 * 60 * 1000);
     log.record("app.started");
   })
   .catch((error) => fatal("app.start.failed", error));

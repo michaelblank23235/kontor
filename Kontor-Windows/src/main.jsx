@@ -39,6 +39,7 @@ import {
   CheckCircle2,
   PanelLeft,
   Tag,
+  Bell,
 } from "lucide-react";
 import { Markdown, MarkdownEditor } from "./Markdown";
 import "./style.css";
@@ -94,6 +95,12 @@ const localTime = (d) => {
   );
 };
 const iso = (d) => (d ? new Date(d + "T12:00:00").toISOString() : null);
+const inDays = (n) => {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return iso(localDate(d));
+};
+const nextMonday = () => inDays((8 - new Date().getDay()) % 7 || 7);
 const title = (x) => x.subject || x.title || x.text || "Ohne Titel";
 const today = () => localDate();
 const overdue = (t) =>
@@ -234,7 +241,12 @@ function App() {
   useEffect(() => {
     if (!api) return;
     refresh();
-    return api.onChanged(refresh);
+    const offNavigate = api.onNavigate((next) => navigate(next));
+    const offChanged = api.onChanged(refresh);
+    return () => {
+      offNavigate();
+      offChanged();
+    };
   }, []);
   useEffect(() => {
     const theme = status?.settings.theme || "dark";
@@ -1615,12 +1627,33 @@ function Detail({
             <Check size={16} />
             Erledigen
           </button>
-          <button
-            onClick={() => action(() => command("postpone", { id: item.id }))}
-          >
+          <span className="postpone-label">
             <Clock size={15} />
-            Eine Woche verschieben
-          </button>
+            Verschieben:
+          </span>
+          {[
+            ["Morgen", () => inDays(1)],
+            ["Nächster Montag", nextMonday],
+            ["+1 Woche", () => null],
+          ].map(([label, due]) => (
+            <button
+              key={label}
+              onClick={() =>
+                action(() =>
+                  command("postpone", { id: item.id, dueDate: due() }),
+                )
+              }
+            >
+              {label}
+            </button>
+          ))}
+          <PostponeDate
+            onPick={(day) =>
+              action(() =>
+                command("postpone", { id: item.id, dueDate: iso(day) }),
+              )
+            }
+          />
         </div>
       )}
       <div className="prose-section">
@@ -2607,10 +2640,44 @@ function PinSettings() {
     </section>
   );
 }
+// Typing a date fires intermediate values (e.g. year 0002), so apply only on confirm.
+function PostponeDate({ onPick }) {
+  const [day, setDay] = useState("");
+  const valid = day >= localDate();
+  return (
+    <form
+      className="postpone-date"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!valid) return;
+        onPick(day);
+        setDay("");
+      }}
+    >
+      <input
+        type="date"
+        aria-label="Auf Datum verschieben"
+        min={localDate()}
+        value={day}
+        onChange={(e) => setDay(e.target.value)}
+      />
+      <button type="submit" disabled={!valid}>
+        OK
+      </button>
+    </form>
+  );
+}
 function SettingsPanel({ status, action, refresh }) {
   const [settings, setSettings] = useState(status.settings),
     [password, setPassword] = useState(""),
     [message, setMessage] = useState("");
+  // Toggles save immediately, independent of unsaved edits elsewhere on the page.
+  const saveNow = (patch) =>
+    action(async () => {
+      await api.settings({ ...status.settings, ...patch });
+      setSettings({ ...settings, ...patch });
+      await refresh();
+    });
   return (
     <div className="page settings-page">
       <div className="page-intro">
@@ -2674,6 +2741,49 @@ function SettingsPanel({ status, action, refresh }) {
       </section>
       <section className="card">
         <h2>
+          <Bell size={19} /> Erinnerungen
+        </h2>
+        <div className="settings-line">
+          <div>
+            <strong>Tägliche Erinnerung</strong>
+            <p>
+              Windows-Benachrichtigung zu fälligen und überfälligen Aufgaben,
+              einmal pro Tag.
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            aria-label="Tägliche Erinnerung"
+            checked={status.settings.reminders !== false}
+            onChange={(e) => saveNow({ reminders: e.target.checked })}
+          />
+        </div>
+        {status.settings.reminders !== false && (
+          <>
+            <div className="settings-line">
+              <div>
+                <strong>Uhrzeit</strong>
+                <p>Frühestens ab dieser Uhrzeit.</p>
+              </div>
+              <input
+                type="time"
+                aria-label="Uhrzeit der Erinnerung"
+                value={status.settings.reminderTime || "07:00"}
+                onChange={(e) =>
+                  e.target.value && saveNow({ reminderTime: e.target.value })
+                }
+              />
+            </div>
+            <p className="hint">
+              Kontor muss dafür entsperrt im Infobereich laufen, denn die
+              Fristen sind verschlüsselt gespeichert. Ist Kontor gesperrt,
+              sehen Sie fällige Aufgaben nach dem Entsperren in der Übersicht.
+            </p>
+          </>
+        )}
+      </section>
+      <section className="card">
+        <h2>
           <ShieldCheck size={19} /> Daten & Sicherungen
         </h2>
         <p>
@@ -2692,14 +2802,7 @@ function SettingsPanel({ status, action, refresh }) {
             type="checkbox"
             aria-label="Automatische Sicherung"
             checked={status.settings.autoBackup !== false}
-            onChange={(e) => {
-              const autoBackup = e.target.checked;
-              action(async () => {
-                await api.settings({ ...status.settings, autoBackup });
-                setSettings({ ...settings, autoBackup });
-                await refresh();
-              });
-            }}
+            onChange={(e) => saveNow({ autoBackup: e.target.checked })}
           />
         </div>
         {status.settings.autoBackup !== false && (

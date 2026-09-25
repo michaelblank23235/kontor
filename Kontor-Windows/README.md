@@ -18,7 +18,8 @@ Beim ersten Start eine PIN aus genau vier Ziffern vergeben (führende Nullen sin
 - Übersicht mit offenen/heute fälligen Aufgaben, letzten Gesprächen, Notizen und Inbox.
 - Gespräche und Vorfälle mit Datum, Typ, Vertraulichkeit, Beteiligten, Markdown-Protokoll und Vereinbarungen; Bearbeiten, Suchen, Zeitraumfilter, Archivieren, Reaktivieren und endgültiges Löschen.
 - Vereinbarungen erzeugen Aufgaben. Erneutes Speichern aktualisiert vorhandene Aufgaben. Entfernte Vereinbarungen entfernen zugehörige offene Aufgaben.
-- Aufgaben mit Fristen, Status, Verschieben um eine Woche, Wiederholung wöchentlich/monatlich/jährlich, Archiv und Filtern. Erledigen erzeugt genau eine Folgeaufgabe; Monatsenden werden berücksichtigt.
+- Tägliche Windows-Benachrichtigung zu fälligen und überfälligen Aufgaben ab einer einstellbaren Uhrzeit (Standard 07:00), solange Kontor entsperrt im Infobereich läuft. Ein Klick öffnet die Aufgaben.
+- Aufgaben mit Fristen, Status, Verschieben auf morgen, nächsten Montag, um eine Woche oder auf ein gewähltes Datum, Wiederholung wöchentlich/monatlich/jährlich, Archiv und Filtern. Erledigen erzeugt genau eine Folgeaufgabe; Monatsenden werden berücksichtigt.
 - Markdown-Notizbuch mit automatischem Speichern, Live-Formatierung, Vorschau, Überschriften, Listenfortsetzung, Einzug, Checkboxen, Code, Links und `[[Wikilinks]]` mit Vorschlägen, Neuanlage und Rückverweisen.
 - Verschachtelte Notizordner, Schlagworte, Personen, Pins und Sortierung nach Änderung, Erstellung oder Titel. Beim Löschen eines Ordners bleiben seine Inhalte erhalten.
 - Bild-/PDF-Anhänge bis 30 MB pro Datei mit Vorschau und Export. Anhänge sind Bestandteil der Datenbank und ihrer Sicherung.

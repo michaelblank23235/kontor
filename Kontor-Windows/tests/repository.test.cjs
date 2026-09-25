@@ -6,6 +6,25 @@ async function setup() {
   const SQL = await init();
   return new Repository(new SQL.Database());
 }
+test("Verschieben: ohne Datum eine Woche, mit Datum genau dorthin", async () => {
+  const r = await setup();
+  const t = r.save("todo", {
+    title: "Zeugnisnoten",
+    dueDate: "2026-09-15T12:00:00.000Z",
+  });
+  const week = r.command("postpone", { id: t.id });
+  assert.equal(week.dueDate, "2026-09-22T12:00:00.000Z");
+  const fixed = r.command("postpone", {
+    id: t.id,
+    dueDate: "2026-10-05T10:00:00.000Z",
+  });
+  assert.equal(fixed.dueDate, "2026-10-05T10:00:00.000Z");
+  assert.equal(fixed.status, "Offen");
+  assert.throws(
+    () => r.command("postpone", { id: t.id, dueDate: "kein Datum" }),
+    /Ungültiges Datum/,
+  );
+});
 test("Gespräch bearbeiten erhält ID und aktualisiert Aufgabe ohne Duplikate", async () => {
   const r = await setup();
   const e = r.save("entry", {
