@@ -1,0 +1,41 @@
+name: Windows EXE bauen
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    defaults:
+      run:
+        working-directory: Kontor-Windows
+
+    steps:
+      - name: Quellcode laden
+        uses: actions/checkout@v6
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Tests ausführen
+        run: npm test
+
+      - name: Windows-Installer bauen
+        run: npm run dist:win -- --publish never
+
+      - name: EXE zum Download bereitstellen
+        uses: actions/upload-artifact@v7
+        with:
+          name: Kontor-Windows-Installer
+          path: Kontor-Windows/release/*.exe
+          if-no-files-found: error
+          retention-days: 30
